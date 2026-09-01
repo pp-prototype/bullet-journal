@@ -244,7 +244,7 @@ function parseTask(input) {
 function timelineHours() {
   const hours = new Set(HOURS);
   state.executions
-    .filter((log) => log.journalDate === selectedDate)
+    .filter((log) => log.journalDate === selectedDate && log.status === 'recorded')
     .forEach((log) => hours.add(koreanHour(log.executedAt)));
   return [...hours].sort((a, b) => a - b);
 }
@@ -331,7 +331,7 @@ function render() {
 
 function timeRow(hour) {
   const plans = state.plans.filter((plan) => plan.journalDate === selectedDate && plan.scheduledHour === hour);
-  const logs = state.executions.filter((log) => log.journalDate === selectedDate && koreanHour(log.executedAt) === hour);
+  const logs = state.executions.filter((log) => log.journalDate === selectedDate && log.status === 'recorded' && koreanHour(log.executedAt) === hour);
   const activePlans = plans.filter((plan) => plan.status === 'planned');
   return `
     <div class="time-label">${hourLabel(hour)}<small>${String(hour).padStart(2, '0')}:00</small></div>
@@ -348,9 +348,8 @@ function timeRow(hour) {
     </div>
     <div class="time-cell actual-cell" data-actual-hour="${hour}">
       ${logs.map((log) => {
-        const voided = log.status === 'voided';
         const executedTime = new Date(log.executedAt).toLocaleTimeString('ko-KR', { timeZone: JOURNAL_TIME_ZONE, hour: '2-digit', minute: '2-digit', hour12: false });
-        return `<div class="actual-item ${voided ? 'voided' : ''}"><span class="check-mark">${voided ? '–' : '✓'}</span><span><strong>${escapeHtml(log.titleSnapshot)}</strong><small>${executedTime}${log.source === 'plan' ? ' · 계획에서 실행' : ' · 직접 기록'}</small></span>${voided ? '<small class="history-state">실행 취소</small>' : `<button type="button" class="cancel-action" data-remove-log="${log.id}">실행 취소</button>`}</div>`;
+        return `<div class="actual-item"><span class="check-mark">✓</span><span><strong>${escapeHtml(log.titleSnapshot)}</strong><small>${executedTime}${log.source === 'plan' ? ' · 계획에서 실행' : ' · 직접 기록'}</small></span><button type="button" class="cancel-action" data-remove-log="${log.id}">실행 취소</button></div>`;
       }).join('')}
       <form class="quick-log" data-log-form="${hour}"><input placeholder="실행 내용 기록" aria-label="${hourLabel(hour)} 실행 내용" /><button aria-label="기록 추가">＋</button></form>
     </div>`;

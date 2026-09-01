@@ -101,8 +101,6 @@ h1 { margin: 0; font-size: clamp(27px, 4vw, 40px); line-height: 1; letter-spacin
 .actual-item > span:nth-child(2) { flex: 1; display: grid; }
 .actual-item strong { font-size: 13px; }
 .actual-item small { color: #797b75; font: 9px 'IBM Plex Mono', monospace; }
-.actual-item.voided { opacity: .58; }
-.actual-item.voided strong { text-decoration: line-through; }
 .quick-log { display: flex; min-height: 29px; border-bottom: 1px dashed #aaa9a2; }
 .quick-log input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; font-size: 12px; }
 .quick-log button { width: 28px; border: 0; background: transparent; cursor: pointer; }
