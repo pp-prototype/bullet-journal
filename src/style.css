@@ -3,6 +3,11 @@
 :root { color: #343633; background: #d8d5cc; font-family: 'Gowun Dodum', sans-serif; font-synthesis: none; }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; background: #d8d5cc; }
+body.is-dragging-task { cursor: grabbing; }
+body.is-dragging-task::before, body.is-dragging-task::after { content: ''; position: fixed; z-index: 40; left: 0; right: 0; height: 95px; opacity: 0; pointer-events: none; transition: opacity .12s; }
+body.is-dragging-task::before { top: 0; background: linear-gradient(#64676080, transparent); }
+body.is-dragging-task::after { bottom: 0; background: linear-gradient(transparent, #64676080); }
+body.is-dragging-task.drag-scroll-up::before, body.is-dragging-task.drag-scroll-down::after { opacity: 1; }
 button, input { font: inherit; }
 button { color: inherit; }
 .page-shell {

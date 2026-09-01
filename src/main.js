@@ -93,6 +93,9 @@ let editingTaskId = null;
 let selectedDate = isoToday;
 let calendarOpen = false;
 let calendarMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+let draggingTaskId = null;
+let dragScrollFrame = null;
+let dragScrollSpeed = 0;
 let authState = {
   loading: isSupabaseConfigured,
   user: null,
@@ -485,11 +488,16 @@ function bindEvents() {
 
   document.querySelectorAll('.task-card[data-task-id]').forEach((card) => {
     card.addEventListener('dragstart', (event) => {
+      draggingTaskId = card.dataset.taskId;
       event.dataTransfer.setData('text/plain', card.dataset.taskId);
       event.dataTransfer.effectAllowed = 'copy';
       card.classList.add('dragging');
+      document.body.classList.add('is-dragging-task');
     });
-    card.addEventListener('dragend', () => card.classList.remove('dragging'));
+    card.addEventListener('dragend', () => {
+      card.classList.remove('dragging');
+      stopDragScroll();
+    });
     card.addEventListener('click', (event) => {
       if (event.target.closest('button')) return;
       selectedTaskId = selectedTaskId === card.dataset.taskId ? null : card.dataset.taskId;
@@ -675,6 +683,41 @@ document.addEventListener('keydown', (event) => {
     render();
   }
 });
+
+function runDragScroll() {
+  if (!draggingTaskId || dragScrollSpeed === 0) {
+    dragScrollFrame = null;
+    return;
+  }
+  window.scrollBy({ top: dragScrollSpeed, behavior: 'auto' });
+  dragScrollFrame = requestAnimationFrame(runDragScroll);
+}
+
+function stopDragScroll() {
+  draggingTaskId = null;
+  dragScrollSpeed = 0;
+  document.body.classList.remove('is-dragging-task', 'drag-scroll-up', 'drag-scroll-down');
+  if (dragScrollFrame) cancelAnimationFrame(dragScrollFrame);
+  dragScrollFrame = null;
+}
+
+document.addEventListener('dragover', (event) => {
+  if (!draggingTaskId) return;
+  const edgeSize = Math.min(150, window.innerHeight * 0.22);
+  const distanceFromBottom = window.innerHeight - event.clientY;
+  let nextSpeed = 0;
+  if (event.clientY < edgeSize) {
+    nextSpeed = -Math.ceil(5 + 17 * (1 - event.clientY / edgeSize));
+  } else if (distanceFromBottom < edgeSize) {
+    nextSpeed = Math.ceil(5 + 17 * (1 - distanceFromBottom / edgeSize));
+  }
+  dragScrollSpeed = nextSpeed;
+  document.body.classList.toggle('drag-scroll-up', nextSpeed < 0);
+  document.body.classList.toggle('drag-scroll-down', nextSpeed > 0);
+  if (nextSpeed !== 0 && !dragScrollFrame) dragScrollFrame = requestAnimationFrame(runDragScroll);
+});
+
+document.addEventListener('drop', stopDragScroll);
 
 render();
 
