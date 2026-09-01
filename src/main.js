@@ -9,18 +9,59 @@ const isoToday = toLocalISO(today);
 
 const defaultState = {
   tasks: [
-    { id: crypto.randomUUID(), title: '주간 리포트 초안', due: isoToday.replaceAll('-', ''), done: false },
-    { id: crypto.randomUUID(), title: '디자인 피드백 정리', due: '', done: false },
+    { id: crypto.randomUUID(), title: '주간 리포트 초안', dueDate: isoToday, status: 'open', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+    { id: crypto.randomUUID(), title: '디자인 피드백 정리', dueDate: null, status: 'open', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
   ],
-  plan: {},
-  actual: {},
+  plans: [],
+  executions: [],
+  modelVersion: 2,
 };
 
 let state;
 try {
-  state = { ...defaultState, ...JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}') };
+  state = normalizeState(JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null'));
 } catch {
   state = defaultState;
+}
+
+function normalizeState(raw) {
+  if (!raw) return structuredClone(defaultState);
+  if (raw.modelVersion === 2 && Array.isArray(raw.plans) && Array.isArray(raw.executions)) return raw;
+  const tasks = (raw.tasks || []).map((task) => ({
+    id: task.id,
+    title: task.title,
+    dueDate: task.due ? `${task.due.slice(0, 4)}-${task.due.slice(4, 6)}-${task.due.slice(6, 8)}` : null,
+    status: 'open',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  }));
+  const plans = Object.entries(raw.plan || {}).flatMap(([hour, items]) => items.map((item) => ({
+    id: crypto.randomUUID(),
+    taskId: item.id,
+    journalDate: isoToday,
+    scheduledHour: Number(hour),
+    titleSnapshot: item.title,
+    status: 'planned',
+    createdAt: new Date().toISOString(),
+    cancelledAt: null,
+  })));
+  const planByLegacyTask = new Map(plans.map((plan) => [plan.taskId, plan]));
+  const executions = Object.entries(raw.actual || {}).flatMap(([hour, logs]) => logs.map((log) => {
+    const linkedPlan = log.sourcePlanId ? planByLegacyTask.get(log.sourcePlanId) : null;
+    return {
+      id: log.id,
+      taskId: linkedPlan?.taskId || null,
+      planId: linkedPlan?.id || null,
+      journalDate: isoToday,
+      executedAt: `${isoToday}T${String(hour).padStart(2, '0')}:00:00`,
+      titleSnapshot: log.title,
+      source: linkedPlan ? 'plan' : 'manual',
+      status: 'recorded',
+      createdAt: new Date().toISOString(),
+      voidedAt: null,
+    };
+  }));
+  return { tasks: tasks.length ? tasks : structuredClone(defaultState.tasks), plans, executions, modelVersion: 2 };
 }
 
 let selectedTaskId = null;
@@ -53,8 +94,8 @@ function hourLabel(hour) {
 }
 
 function dueLabel(value) {
-  if (!/^\d{8}$/.test(value)) return '';
-  return `${Number(value.slice(4, 6))}월 ${Number(value.slice(6))}일`;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return '';
+  return `${Number(value.slice(5, 7))}월 ${Number(value.slice(8))}일`;
 }
 
 function dateFromISO(value) {
@@ -121,8 +162,8 @@ function parseTask(input) {
 function render() {
   const displayDate = dateFromISO(selectedDate);
   const shortDay = new Intl.DateTimeFormat('ko-KR', { weekday: 'long' }).format(displayDate);
-  const plannedTaskIds = new Set(Object.values(state.plan).flat().map((item) => item.id));
-  const openTasks = state.tasks.filter((task) => !plannedTaskIds.has(task.id));
+  const plannedTaskIds = new Set(state.plans.filter((plan) => plan.journalDate === selectedDate && plan.status === 'planned').map((plan) => plan.taskId));
+  const openTasks = state.tasks.filter((task) => task.status === 'open' && !plannedTaskIds.has(task.id));
   app.innerHTML = `
     <main class="page-shell">
       <header class="masthead">
@@ -162,13 +203,13 @@ function render() {
           ${openTasks.length ? openTasks.map((task) => editingTaskId === task.id ? `
             <form class="task-card task-edit-card" data-edit-form="${task.id}">
               <span class="edit-mark" aria-hidden="true">✎</span>
-              <input value="${escapeHtml(`${task.title}${task.due ? ` (${task.due})` : ''}`)}" aria-label="할 일과 마감일 수정" />
+              <input value="${escapeHtml(`${task.title}${task.dueDate ? ` (${task.dueDate.replaceAll('-', '')})` : ''}`)}" aria-label="할 일과 마감일 수정" />
               <button type="submit">저장</button>
               <button type="button" data-cancel-edit>취소</button>
             </form>` : `
             <article class="task-card ${selectedTaskId === task.id ? 'selected' : ''}" draggable="true" data-task-id="${task.id}" tabindex="0">
               <span class="drag-handle" aria-hidden="true">⠿</span>
-              <span class="task-copy"><strong>${escapeHtml(task.title)}</strong>${task.due ? `<small>마감 · ${dueLabel(task.due)}</small>` : '<small>기한 없음</small>'}</span>
+              <span class="task-copy"><strong>${escapeHtml(task.title)}</strong>${task.dueDate ? `<small>마감 · ${dueLabel(task.dueDate)}</small>` : '<small>기한 없음</small>'}</span>
               <button class="edit-task" type="button" data-edit="${task.id}" aria-label="할 일 수정">수정</button>
               <button class="remove-task" type="button" data-remove="${task.id}" aria-label="할 일 삭제">×</button>
             </article>`).join('') : '<p class="empty-tasks">목록이 비어 있어요. 오늘 할 일을 하나 적어보세요.</p>'}
@@ -199,22 +240,28 @@ function render() {
 }
 
 function timeRow(hour) {
-  const plans = state.plan[hour] || [];
-  const logs = state.actual[hour] || [];
+  const plans = state.plans.filter((plan) => plan.journalDate === selectedDate && plan.scheduledHour === hour);
+  const logs = state.executions.filter((log) => log.journalDate === selectedDate && new Date(log.executedAt).getHours() === hour);
+  const activePlans = plans.filter((plan) => plan.status === 'planned');
   return `
     <div class="time-label">${hourLabel(hour)}<small>${String(hour).padStart(2, '0')}:00</small></div>
     <div class="time-cell plan-cell" data-hour="${hour}">
       ${plans.map((item) => {
-        const committed = Object.values(state.actual).flat().some((log) => log.sourcePlanId === item.id);
-        return `<div class="plan-item ${committed ? 'committed' : ''}">
-          <label><input type="checkbox" data-commit="${item.id}" data-hour="${hour}" ${committed ? 'checked disabled' : ''} /><span>${escapeHtml(item.title)}</span></label>
-          <button type="button" class="cancel-action" data-cancel-plan="${item.id}" data-hour="${hour}">계획 취소</button>
+        const committed = state.executions.some((log) => log.planId === item.id && log.status === 'recorded');
+        const cancelled = item.status === 'cancelled';
+        return `<div class="plan-item ${committed ? 'committed' : ''} ${cancelled ? 'cancelled' : ''}">
+          <label>${cancelled ? '<span class="status-mark">–</span>' : `<input type="checkbox" data-commit="${item.id}" ${committed ? 'checked disabled' : ''} />`}<span>${escapeHtml(item.titleSnapshot)}</span></label>
+          ${cancelled ? '<small class="history-state">취소된 계획</small>' : `<button type="button" class="cancel-action" data-cancel-plan="${item.id}">계획 취소</button>`}
         </div>`;
       }).join('')}
-      ${!plans.length ? '<button class="cell-placeholder" type="button">+ 계획 배치</button>' : ''}
+      ${!activePlans.length ? '<button class="cell-placeholder" type="button">+ 계획 배치</button>' : ''}
     </div>
     <div class="time-cell actual-cell" data-actual-hour="${hour}">
-      ${logs.map((log) => `<div class="actual-item"><span class="check-mark">✓</span><span><strong>${escapeHtml(log.title)}</strong><small>${escapeHtml(log.completedAt)}${log.sourcePlanId ? ' · 계획에서 실행' : ''}</small></span><button type="button" class="cancel-action" data-remove-log="${log.id}" data-hour="${hour}">실행 취소</button></div>`).join('')}
+      ${logs.map((log) => {
+        const voided = log.status === 'voided';
+        const executedTime = new Date(log.executedAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
+        return `<div class="actual-item ${voided ? 'voided' : ''}"><span class="check-mark">${voided ? '–' : '✓'}</span><span><strong>${escapeHtml(log.titleSnapshot)}</strong><small>${executedTime}${log.source === 'plan' ? ' · 계획에서 실행' : ' · 직접 기록'}</small></span>${voided ? '<small class="history-state">실행 취소</small>' : `<button type="button" class="cancel-action" data-remove-log="${log.id}">실행 취소</button>`}</div>`;
+      }).join('')}
       <form class="quick-log" data-log-form="${hour}"><input placeholder="실행 내용 기록" aria-label="${hourLabel(hour)} 실행 내용" /><button aria-label="기록 추가">＋</button></form>
     </div>`;
 }
@@ -229,9 +276,11 @@ function notify(message) {
 function addPlan(taskId, hour) {
   const task = state.tasks.find((item) => item.id === taskId);
   if (!task) return;
-  state.plan[hour] ||= [];
-  if (state.plan[hour].some((item) => item.id === taskId)) return notify('이미 이 시간에 배치된 할 일이에요.');
-  state.plan[hour].push({ id: task.id, title: task.title });
+  if (state.plans.some((plan) => plan.taskId === taskId && plan.journalDate === selectedDate && plan.status === 'planned')) return notify('이미 오늘 계획에 배치된 할 일이에요.');
+  state.plans.push({
+    id: crypto.randomUUID(), taskId: task.id, journalDate: selectedDate, scheduledHour: Number(hour),
+    titleSnapshot: task.title, status: 'planned', createdAt: new Date().toISOString(), cancelledAt: null,
+  });
   selectedTaskId = null;
   save(); render(); notify(`${hourLabel(Number(hour))}에 배치했어요.`);
 }
@@ -318,7 +367,12 @@ function bindEvents() {
     const parsed = parseTask(input.value);
     if (!parsed.title) return;
     if (parsed.due && !/^\d{8}$/.test(parsed.due)) return notify('마감일은 YYYYMMDD 형식으로 적어주세요.');
-    state.tasks.unshift({ id: crypto.randomUUID(), ...parsed, done: false });
+    const timestamp = new Date().toISOString();
+    state.tasks.unshift({
+      id: crypto.randomUUID(), title: parsed.title,
+      dueDate: parsed.due ? `${parsed.due.slice(0, 4)}-${parsed.due.slice(4, 6)}-${parsed.due.slice(6, 8)}` : null,
+      status: 'open', createdAt: timestamp, updatedAt: timestamp,
+    });
     save(); render();
   });
 
@@ -340,8 +394,7 @@ function bindEvents() {
   });
 
   document.querySelectorAll('[data-remove]').forEach((button) => button.addEventListener('click', () => {
-    state.tasks = state.tasks.filter((task) => task.id !== button.dataset.remove);
-    Object.keys(state.plan).forEach((hour) => { state.plan[hour] = state.plan[hour].filter((item) => item.id !== button.dataset.remove); });
+    state.tasks = state.tasks.map((task) => task.id === button.dataset.remove ? { ...task, status: 'archived', updatedAt: new Date().toISOString() } : task);
     save(); render();
   }));
 
@@ -360,10 +413,11 @@ function bindEvents() {
       const parsed = parseTask(form.querySelector('input').value);
       if (!parsed.title) return notify('할 일 내용을 입력해주세요.');
       const taskId = form.dataset.editForm;
-      state.tasks = state.tasks.map((task) => task.id === taskId ? { ...task, ...parsed } : task);
-      Object.keys(state.plan).forEach((hour) => {
-        state.plan[hour] = state.plan[hour].map((plan) => plan.id === taskId ? { ...plan, title: parsed.title } : plan);
-      });
+      state.tasks = state.tasks.map((task) => task.id === taskId ? {
+        ...task, title: parsed.title,
+        dueDate: parsed.due ? `${parsed.due.slice(0, 4)}-${parsed.due.slice(4, 6)}-${parsed.due.slice(6, 8)}` : null,
+        updatedAt: new Date().toISOString(),
+      } : task);
       editingTaskId = null;
       save(); render(); notify('할 일을 수정했어요.');
     });
@@ -389,19 +443,21 @@ function bindEvents() {
 
   document.querySelectorAll('[data-commit]').forEach((checkbox) => checkbox.addEventListener('change', () => {
     if (!checkbox.checked) return;
-    const planHour = checkbox.dataset.hour;
-    const item = state.plan[planHour].find((plan) => plan.id === checkbox.dataset.commit);
+    const item = state.plans.find((plan) => plan.id === checkbox.dataset.commit && plan.status === 'planned');
+    if (!item) return;
     const now = new Date();
     const executionHour = Math.min(HOURS.at(-1), Math.max(HOURS[0], now.getHours()));
-    const completedAt = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')} 완료`;
-    state.actual[executionHour] ||= [];
-    state.actual[executionHour].push({ id: crypto.randomUUID(), sourcePlanId: item.id, title: item.title, completedAt });
+    const executedAt = `${selectedDate}T${String(executionHour).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+    state.executions.push({
+      id: crypto.randomUUID(), taskId: item.taskId, planId: item.id, journalDate: selectedDate,
+      executedAt, titleSnapshot: item.titleSnapshot, source: 'plan', status: 'recorded',
+      createdAt: now.toISOString(), voidedAt: null,
+    });
     save(); setTimeout(() => { render(); notify('실행 내역에 커밋했어요.'); }, 180);
   }));
 
   document.querySelectorAll('[data-cancel-plan]').forEach((button) => button.addEventListener('click', () => {
-    const hour = button.dataset.hour;
-    state.plan[hour] = state.plan[hour].filter((plan) => plan.id !== button.dataset.cancelPlan);
+    state.plans = state.plans.map((plan) => plan.id === button.dataset.cancelPlan ? { ...plan, status: 'cancelled', cancelledAt: new Date().toISOString() } : plan);
     save(); render(); notify('할 일 목록으로 되돌렸어요.');
   }));
 
@@ -410,13 +466,17 @@ function bindEvents() {
     const input = form.querySelector('input');
     if (!input.value.trim()) return;
     const hour = form.dataset.logForm;
-    state.actual[hour] ||= [];
-    state.actual[hour].push({ id: crypto.randomUUID(), title: input.value.trim(), completedAt: `${String(hour).padStart(2, '0')}:00 직접 기록` });
+    const timestamp = new Date().toISOString();
+    state.executions.push({
+      id: crypto.randomUUID(), taskId: null, planId: null, journalDate: selectedDate,
+      executedAt: `${selectedDate}T${String(hour).padStart(2, '0')}:00:00`, titleSnapshot: input.value.trim(),
+      source: 'manual', status: 'recorded', createdAt: timestamp, voidedAt: null,
+    });
     save(); render();
   }));
 
   document.querySelectorAll('[data-remove-log]').forEach((button) => button.addEventListener('click', () => {
-    state.actual[button.dataset.hour] = state.actual[button.dataset.hour].filter((log) => log.id !== button.dataset.removeLog);
+    state.executions = state.executions.map((log) => log.id === button.dataset.removeLog ? { ...log, status: 'voided', voidedAt: new Date().toISOString() } : log);
     save(); render();
   }));
 }
