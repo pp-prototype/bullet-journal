@@ -1,5 +1,6 @@
 import './style.css';
 import { isSupabaseConfigured, supabase } from './supabase.js';
+import { cancelPlan, fetchJournal, hasRecordedExecution, insertExecution, insertPlan, insertTask, updateTask, voidExecution } from './journalRepository.js';
 
 const HOURS = Array.from({ length: 13 }, (_, index) => index + 8);
 const STORAGE_KEY = 'grid-journal-v1';
@@ -23,6 +24,9 @@ try {
 } catch {
   state = defaultState;
 }
+let localState = state;
+let remoteRequestId = 0;
+let activeRemoteUserId = null;
 
 function normalizeState(raw) {
   if (!raw) return structuredClone(defaultState);
@@ -76,12 +80,70 @@ let authState = {
   mode: 'login',
   message: '',
   error: '',
+  dataLoading: false,
 };
 
 const app = document.querySelector('#app');
 
 function save() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  if (authState.user) return;
+  localState = state;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(localState));
+}
+
+async function loadRemoteJournal() {
+  if (!authState.user) return;
+  const requestId = ++remoteRequestId;
+  authState = { ...authState, dataLoading: true };
+  render();
+  try {
+    const remoteState = await fetchJournal(authState.user.id, selectedDate);
+    if (requestId !== remoteRequestId) return;
+    state = { ...remoteState, modelVersion: 2 };
+    authState = { ...authState, dataLoading: false };
+    render();
+  } catch (error) {
+    if (requestId !== remoteRequestId) return;
+    console.error(error);
+    authState = { ...authState, dataLoading: false };
+    render();
+    notify('서버 기록을 불러오지 못했어요. 테이블 설정을 확인해주세요.');
+  }
+}
+
+async function performMutation(action, successMessage) {
+  try {
+    await action();
+    save();
+    render();
+    if (successMessage) notify(successMessage);
+    return true;
+  } catch (error) {
+    console.error(error);
+    render();
+    notify('저장하지 못했어요. 잠시 후 다시 시도해주세요.');
+    return false;
+  }
+}
+
+function handleAuthUser(user) {
+  const nextUserId = user?.id || null;
+  authState = { ...authState, loading: false, user: user || null };
+  if (nextUserId === activeRemoteUserId) {
+    render();
+    return;
+  }
+  activeRemoteUserId = nextUserId;
+  remoteRequestId += 1;
+  if (user) {
+    state = { tasks: [], plans: [], executions: [], modelVersion: 2 };
+    render();
+    loadRemoteJournal();
+  } else {
+    state = localState;
+    authState = { ...authState, dataLoading: false };
+    render();
+  }
 }
 
 function escapeHtml(value = '') {
@@ -273,14 +335,22 @@ function notify(message) {
   setTimeout(() => toast.classList.remove('show'), 1800);
 }
 
-function addPlan(taskId, hour) {
+async function addPlan(taskId, hour) {
   const task = state.tasks.find((item) => item.id === taskId);
   if (!task) return;
   if (state.plans.some((plan) => plan.taskId === taskId && plan.journalDate === selectedDate && plan.status === 'planned')) return notify('이미 오늘 계획에 배치된 할 일이에요.');
-  state.plans.push({
+  const draft = {
     id: crypto.randomUUID(), taskId: task.id, journalDate: selectedDate, scheduledHour: Number(hour),
     titleSnapshot: task.title, status: 'planned', createdAt: new Date().toISOString(), cancelledAt: null,
-  });
+  };
+  if (authState.user) {
+    const success = await performMutation(async () => {
+      state.plans.push(await insertPlan(authState.user.id, draft));
+    });
+    if (!success) return;
+  } else {
+    state.plans.push(draft);
+  }
   selectedTaskId = null;
   save(); render(); notify(`${hourLabel(Number(hour))}에 배치했어요.`);
 }
@@ -348,6 +418,7 @@ function bindEvents() {
     calendarMonth = new Date(today.getFullYear(), today.getMonth(), 1);
     calendarOpen = false;
     render();
+    if (authState.user) loadRemoteJournal();
   });
   document.querySelectorAll('[data-calendar-date]').forEach((button) => button.addEventListener('click', () => {
     selectedDate = button.dataset.calendarDate;
@@ -355,24 +426,33 @@ function bindEvents() {
     calendarMonth = new Date(chosen.getFullYear(), chosen.getMonth(), 1);
     calendarOpen = false;
     render();
+    if (authState.user) loadRemoteJournal();
   }));
 
   if (calendarOpen) {
     setTimeout(() => document.addEventListener('click', closeCalendarOnOutside, { once: true }), 0);
   }
 
-  document.querySelector('#task-form').addEventListener('submit', (event) => {
+  document.querySelector('#task-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const input = document.querySelector('#task-input');
     const parsed = parseTask(input.value);
     if (!parsed.title) return;
     if (parsed.due && !/^\d{8}$/.test(parsed.due)) return notify('마감일은 YYYYMMDD 형식으로 적어주세요.');
     const timestamp = new Date().toISOString();
-    state.tasks.unshift({
+    const draft = {
       id: crypto.randomUUID(), title: parsed.title,
       dueDate: parsed.due ? `${parsed.due.slice(0, 4)}-${parsed.due.slice(4, 6)}-${parsed.due.slice(6, 8)}` : null,
       status: 'open', createdAt: timestamp, updatedAt: timestamp,
-    });
+    };
+    if (authState.user) {
+      const success = await performMutation(async () => {
+        state.tasks.unshift(await insertTask(authState.user.id, draft));
+      });
+      if (!success) return;
+    } else {
+      state.tasks.unshift(draft);
+    }
     save(); render();
   });
 
@@ -393,9 +473,17 @@ function bindEvents() {
     });
   });
 
-  document.querySelectorAll('[data-remove]').forEach((button) => button.addEventListener('click', () => {
-    state.tasks = state.tasks.map((task) => task.id === button.dataset.remove ? { ...task, status: 'archived', updatedAt: new Date().toISOString() } : task);
-    save(); render();
+  document.querySelectorAll('[data-remove]').forEach((button) => button.addEventListener('click', async () => {
+    const taskId = button.dataset.remove;
+    if (authState.user) {
+      await performMutation(async () => {
+        const updated = await updateTask(taskId, { status: 'archived' });
+        state.tasks = state.tasks.map((task) => task.id === taskId ? updated : task);
+      });
+    } else {
+      state.tasks = state.tasks.map((task) => task.id === taskId ? { ...task, status: 'archived', updatedAt: new Date().toISOString() } : task);
+      save(); render();
+    }
   }));
 
   document.querySelectorAll('[data-edit]').forEach((button) => button.addEventListener('click', () => {
@@ -408,16 +496,21 @@ function bindEvents() {
   }));
 
   document.querySelectorAll('[data-edit-form]').forEach((form) => {
-    form.addEventListener('submit', (event) => {
+    form.addEventListener('submit', async (event) => {
       event.preventDefault();
       const parsed = parseTask(form.querySelector('input').value);
       if (!parsed.title) return notify('할 일 내용을 입력해주세요.');
       const taskId = form.dataset.editForm;
-      state.tasks = state.tasks.map((task) => task.id === taskId ? {
-        ...task, title: parsed.title,
-        dueDate: parsed.due ? `${parsed.due.slice(0, 4)}-${parsed.due.slice(4, 6)}-${parsed.due.slice(6, 8)}` : null,
-        updatedAt: new Date().toISOString(),
-      } : task);
+      const changes = { title: parsed.title, dueDate: parsed.due ? `${parsed.due.slice(0, 4)}-${parsed.due.slice(4, 6)}-${parsed.due.slice(6, 8)}` : null };
+      if (authState.user) {
+        const success = await performMutation(async () => {
+          const updated = await updateTask(taskId, changes);
+          state.tasks = state.tasks.map((task) => task.id === taskId ? updated : task);
+        });
+        if (!success) return;
+      } else {
+        state.tasks = state.tasks.map((task) => task.id === taskId ? { ...task, ...changes, updatedAt: new Date().toISOString() } : task);
+      }
       editingTaskId = null;
       save(); render(); notify('할 일을 수정했어요.');
     });
@@ -441,43 +534,91 @@ function bindEvents() {
     });
   });
 
-  document.querySelectorAll('[data-commit]').forEach((checkbox) => checkbox.addEventListener('change', () => {
+  document.querySelectorAll('[data-commit]').forEach((checkbox) => checkbox.addEventListener('change', async () => {
     if (!checkbox.checked) return;
     const item = state.plans.find((plan) => plan.id === checkbox.dataset.commit && plan.status === 'planned');
     if (!item) return;
     const now = new Date();
     const executionHour = Math.min(HOURS.at(-1), Math.max(HOURS[0], now.getHours()));
     const executedAt = `${selectedDate}T${String(executionHour).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
-    state.executions.push({
+    const draft = {
       id: crypto.randomUUID(), taskId: item.taskId, planId: item.id, journalDate: selectedDate,
       executedAt, titleSnapshot: item.titleSnapshot, source: 'plan', status: 'recorded',
       createdAt: now.toISOString(), voidedAt: null,
-    });
+    };
+    if (authState.user) {
+      const success = await performMutation(async () => {
+        state.executions.push(await insertExecution(authState.user.id, draft));
+        const updatedTask = await updateTask(item.taskId, { status: 'completed' });
+        state.tasks = state.tasks.map((task) => task.id === item.taskId ? updatedTask : task);
+      });
+      if (!success) return;
+    } else {
+      state.executions.push(draft);
+      state.tasks = state.tasks.map((task) => task.id === item.taskId ? { ...task, status: 'completed', updatedAt: now.toISOString() } : task);
+    }
     save(); setTimeout(() => { render(); notify('실행 내역에 커밋했어요.'); }, 180);
   }));
 
-  document.querySelectorAll('[data-cancel-plan]').forEach((button) => button.addEventListener('click', () => {
-    state.plans = state.plans.map((plan) => plan.id === button.dataset.cancelPlan ? { ...plan, status: 'cancelled', cancelledAt: new Date().toISOString() } : plan);
-    save(); render(); notify('할 일 목록으로 되돌렸어요.');
+  document.querySelectorAll('[data-cancel-plan]').forEach((button) => button.addEventListener('click', async () => {
+    const planId = button.dataset.cancelPlan;
+    if (authState.user) {
+      await performMutation(async () => {
+        const updated = await cancelPlan(planId);
+        state.plans = state.plans.map((plan) => plan.id === planId ? updated : plan);
+        const updatedTask = await updateTask(updated.taskId, { status: 'open' });
+        state.tasks = state.tasks.map((task) => task.id === updated.taskId ? updatedTask : task);
+      }, '할 일 목록으로 되돌렸어요.');
+    } else {
+      const target = state.plans.find((plan) => plan.id === planId);
+      state.plans = state.plans.map((plan) => plan.id === planId ? { ...plan, status: 'cancelled', cancelledAt: new Date().toISOString() } : plan);
+      state.tasks = state.tasks.map((task) => task.id === target?.taskId ? { ...task, status: 'open', updatedAt: new Date().toISOString() } : task);
+      save(); render(); notify('할 일 목록으로 되돌렸어요.');
+    }
   }));
 
-  document.querySelectorAll('[data-log-form]').forEach((form) => form.addEventListener('submit', (event) => {
+  document.querySelectorAll('[data-log-form]').forEach((form) => form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const input = form.querySelector('input');
     if (!input.value.trim()) return;
     const hour = form.dataset.logForm;
     const timestamp = new Date().toISOString();
-    state.executions.push({
+    const draft = {
       id: crypto.randomUUID(), taskId: null, planId: null, journalDate: selectedDate,
       executedAt: `${selectedDate}T${String(hour).padStart(2, '0')}:00:00`, titleSnapshot: input.value.trim(),
       source: 'manual', status: 'recorded', createdAt: timestamp, voidedAt: null,
-    });
+    };
+    if (authState.user) {
+      const success = await performMutation(async () => {
+        state.executions.push(await insertExecution(authState.user.id, draft));
+      });
+      if (!success) return;
+    } else {
+      state.executions.push(draft);
+    }
     save(); render();
   }));
 
-  document.querySelectorAll('[data-remove-log]').forEach((button) => button.addEventListener('click', () => {
-    state.executions = state.executions.map((log) => log.id === button.dataset.removeLog ? { ...log, status: 'voided', voidedAt: new Date().toISOString() } : log);
-    save(); render();
+  document.querySelectorAll('[data-remove-log]').forEach((button) => button.addEventListener('click', async () => {
+    const executionId = button.dataset.removeLog;
+    if (authState.user) {
+      await performMutation(async () => {
+        const updated = await voidExecution(executionId);
+        state.executions = state.executions.map((log) => log.id === executionId ? updated : log);
+        if (updated.taskId && !await hasRecordedExecution(updated.taskId)) {
+          const updatedTask = await updateTask(updated.taskId, { status: 'open' });
+          state.tasks = state.tasks.map((task) => task.id === updated.taskId ? updatedTask : task);
+        }
+      });
+    } else {
+      const target = state.executions.find((log) => log.id === executionId);
+      state.executions = state.executions.map((log) => log.id === executionId ? { ...log, status: 'voided', voidedAt: new Date().toISOString() } : log);
+      const stillRecorded = target?.taskId && state.executions.some((log) => log.taskId === target.taskId && log.status === 'recorded');
+      if (target?.taskId && !stillRecorded) {
+        state.tasks = state.tasks.map((task) => task.id === target.taskId ? { ...task, status: 'open', updatedAt: new Date().toISOString() } : task);
+      }
+      save(); render();
+    }
   }));
 }
 
@@ -511,11 +652,9 @@ render();
 
 if (supabase) {
   supabase.auth.getSession().then(({ data }) => {
-    authState = { ...authState, loading: false, user: data.session?.user || null };
-    render();
+    handleAuthUser(data.session?.user || null);
   });
   supabase.auth.onAuthStateChange((_event, session) => {
-    authState = { ...authState, loading: false, user: session?.user || null };
-    render();
+    handleAuthUser(session?.user || null);
   });
 }
