@@ -50,7 +50,8 @@ function parseTask(input) {
 }
 
 function render() {
-  const openTasks = state.tasks.filter((task) => !task.done);
+  const plannedTaskIds = new Set(Object.values(state.plan).flat().map((item) => item.id));
+  const openTasks = state.tasks.filter((task) => !plannedTaskIds.has(task.id));
   app.innerHTML = `
     <main class="page-shell">
       <header class="masthead">
@@ -118,11 +119,17 @@ function timeRow(hour) {
   return `
     <div class="time-label">${hourLabel(hour)}<small>${String(hour).padStart(2, '0')}:00</small></div>
     <div class="time-cell plan-cell" data-hour="${hour}">
-      ${plans.map((item) => `<label class="plan-item"><input type="checkbox" data-commit="${item.id}" data-hour="${hour}" /><span>${escapeHtml(item.title)}</span></label>`).join('')}
+      ${plans.map((item) => {
+        const committed = Object.values(state.actual).flat().some((log) => log.sourcePlanId === item.id);
+        return `<div class="plan-item ${committed ? 'committed' : ''}">
+          <label><input type="checkbox" data-commit="${item.id}" data-hour="${hour}" ${committed ? 'checked disabled' : ''} /><span>${escapeHtml(item.title)}</span></label>
+          <button type="button" class="cancel-action" data-cancel-plan="${item.id}" data-hour="${hour}">계획 취소</button>
+        </div>`;
+      }).join('')}
       ${!plans.length ? '<button class="cell-placeholder" type="button">+ 계획 배치</button>' : ''}
     </div>
     <div class="time-cell actual-cell" data-actual-hour="${hour}">
-      ${logs.map((log) => `<div class="actual-item"><span class="check-mark">✓</span><span><strong>${escapeHtml(log.title)}</strong><small>${escapeHtml(log.completedAt)}</small></span><button type="button" data-remove-log="${log.id}" data-hour="${hour}" aria-label="기록 삭제">×</button></div>`).join('')}
+      ${logs.map((log) => `<div class="actual-item"><span class="check-mark">✓</span><span><strong>${escapeHtml(log.title)}</strong><small>${escapeHtml(log.completedAt)}${log.sourcePlanId ? ' · 계획에서 실행' : ''}</small></span><button type="button" class="cancel-action" data-remove-log="${log.id}" data-hour="${hour}">실행 취소</button></div>`).join('')}
       <form class="quick-log" data-log-form="${hour}"><input placeholder="실행 내용 기록" aria-label="${hourLabel(hour)} 실행 내용" /><button aria-label="기록 추가">＋</button></form>
     </div>`;
 }
@@ -190,16 +197,20 @@ function bindEvents() {
 
   document.querySelectorAll('[data-commit]').forEach((checkbox) => checkbox.addEventListener('change', () => {
     if (!checkbox.checked) return;
-    const hour = checkbox.dataset.hour;
-    const item = state.plan[hour].find((plan) => plan.id === checkbox.dataset.commit);
+    const planHour = checkbox.dataset.hour;
+    const item = state.plan[planHour].find((plan) => plan.id === checkbox.dataset.commit);
     const now = new Date();
+    const executionHour = Math.min(HOURS.at(-1), Math.max(HOURS[0], now.getHours()));
     const completedAt = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')} 완료`;
-    state.actual[hour] ||= [];
-    state.actual[hour].push({ id: crypto.randomUUID(), title: item.title, completedAt });
-    state.plan[hour] = state.plan[hour].filter((plan) => plan.id !== item.id);
-    const stillPlanned = Object.values(state.plan).some((items) => items.some((plan) => plan.id === item.id));
-    if (!stillPlanned) state.tasks = state.tasks.map((task) => task.id === item.id ? { ...task, done: true } : task);
+    state.actual[executionHour] ||= [];
+    state.actual[executionHour].push({ id: crypto.randomUUID(), sourcePlanId: item.id, title: item.title, completedAt });
     save(); setTimeout(() => { render(); notify('실행 내역에 커밋했어요.'); }, 180);
+  }));
+
+  document.querySelectorAll('[data-cancel-plan]').forEach((button) => button.addEventListener('click', () => {
+    const hour = button.dataset.hour;
+    state.plan[hour] = state.plan[hour].filter((plan) => plan.id !== button.dataset.cancelPlan);
+    save(); render(); notify('할 일 목록으로 되돌렸어요.');
   }));
 
   document.querySelectorAll('[data-log-form]').forEach((form) => form.addEventListener('submit', (event) => {

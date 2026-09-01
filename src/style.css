@@ -37,7 +37,7 @@ h1 { margin: 0; font-size: clamp(27px, 4vw, 40px); line-height: 1; letter-spacin
 .task-copy { min-width: 0; flex: 1; display: grid; }
 .task-copy strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 14px; }
 .task-copy small { color: #777871; font: 10px 'IBM Plex Mono', monospace; margin-top: 2px; }
-.remove-task, [data-remove-log] { border: 0; background: transparent; font: 18px 'IBM Plex Mono', monospace; cursor: pointer; opacity: .45; }
+.remove-task { border: 0; background: transparent; font: 18px 'IBM Plex Mono', monospace; cursor: pointer; opacity: .45; }
 .empty-tasks { grid-column: 1/-1; text-align: center; color: #777972; border: 1px dashed #96978f; margin: 0; padding: 18px; background: #f3f0e7; }
 .mobile-hint { display: none; margin: 9px 0 0; color: #777972; font-size: 11px; }
 .journal-heading { border-bottom: 1px solid #555853; padding-bottom: 9px; }
@@ -57,9 +57,14 @@ h1 { margin: 0; font-size: clamp(27px, 4vw, 40px); line-height: 1; letter-spacin
 .actual-cell { grid-column: 3; border-left: 1px solid #aaa9a2; background: rgba(231,228,218,.55); }
 .drop-ready { background: #d6d3c5; outline: 2px dashed #555853; outline-offset: -5px; }
 .cell-placeholder { width: 100%; height: 100%; min-height: 58px; border: 0; background: transparent; color: #999a93; cursor: pointer; text-align: left; }
-.plan-item { display: flex; align-items: flex-start; gap: 8px; padding: 7px 8px; margin-bottom: 5px; border-left: 3px solid #555853; background: #ebe8de; font-size: 13px; cursor: pointer; }
+.plan-item { display: flex; align-items: flex-start; gap: 8px; padding: 7px 8px; margin-bottom: 5px; border-left: 3px solid #555853; background: #ebe8de; font-size: 13px; }
+.plan-item label { min-width: 0; flex: 1; display: flex; align-items: flex-start; gap: 8px; cursor: pointer; }
+.plan-item.committed { background: #deddd5; }
+.plan-item.committed label span { text-decoration: line-through; color: #73756f; }
 .plan-item input { appearance: none; width: 16px; height: 16px; margin: 1px 0 0; flex: 0 0 auto; border: 1px solid #4c4f4b; background: #f8f5ed; cursor: pointer; }
 .plan-item input:checked::after { content: '✓'; display: block; line-height: 13px; text-align: center; }
+.cancel-action { flex: 0 0 auto; padding: 2px 4px; border: 0; border-bottom: 1px solid #8d8f88; background: transparent; color: #777972; font-size: 9px; cursor: pointer; }
+.cancel-action:hover { color: #343633; border-color: #343633; }
 .actual-item { display: flex; align-items: flex-start; gap: 8px; padding: 5px 4px; }
 .check-mark { width: 17px; height: 17px; display: grid; place-items: center; flex: 0 0 auto; background: #555853; color: white; font-size: 10px; }
 .actual-item > span:nth-child(2) { flex: 1; display: grid; }
