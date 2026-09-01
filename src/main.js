@@ -4,9 +4,29 @@ import { cancelPlan, fetchJournal, hasRecordedExecution, insertExecution, insert
 
 const HOURS = Array.from({ length: 13 }, (_, index) => index + 8);
 const STORAGE_KEY = 'grid-journal-v1';
-const today = new Date();
+const JOURNAL_TIME_ZONE = 'Asia/Seoul';
+
+function koreanClock(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: JOURNAL_TIME_ZONE,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(date);
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return {
+    year: Number(value.year), month: Number(value.month), day: Number(value.day),
+    hour: Number(value.hour), minute: Number(value.minute), second: Number(value.second),
+  };
+}
+
+function koreanHour(dateValue) {
+  return koreanClock(new Date(dateValue)).hour;
+}
+
+const initialKoreanClock = koreanClock();
+const today = new Date(initialKoreanClock.year, initialKoreanClock.month - 1, initialKoreanClock.day);
 const toLocalISO = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-const isoToday = toLocalISO(today);
+const isoToday = `${initialKoreanClock.year}-${String(initialKoreanClock.month).padStart(2, '0')}-${String(initialKoreanClock.day).padStart(2, '0')}`;
 
 const defaultState = {
   tasks: [
@@ -57,7 +77,7 @@ function normalizeState(raw) {
       taskId: linkedPlan?.taskId || null,
       planId: linkedPlan?.id || null,
       journalDate: isoToday,
-      executedAt: `${isoToday}T${String(hour).padStart(2, '0')}:00:00`,
+      executedAt: `${isoToday}T${String(hour).padStart(2, '0')}:00:00+09:00`,
       titleSnapshot: log.title,
       source: linkedPlan ? 'plan' : 'manual',
       status: 'recorded',
@@ -221,6 +241,14 @@ function parseTask(input) {
   };
 }
 
+function timelineHours() {
+  const hours = new Set(HOURS);
+  state.executions
+    .filter((log) => log.journalDate === selectedDate)
+    .forEach((log) => hours.add(koreanHour(log.executedAt)));
+  return [...hours].sort((a, b) => a - b);
+}
+
 function render() {
   const displayDate = dateFromISO(selectedDate);
   const shortDay = new Intl.DateTimeFormat('ko-KR', { weekday: 'long' }).format(displayDate);
@@ -290,7 +318,7 @@ function render() {
         <div class="timeline-grid">
           <div class="column-title"><span>PLAN</span><strong>오늘의 계획</strong></div>
           <div class="column-title actual-title"><span>LOG</span><strong>실제 실행</strong></div>
-          ${HOURS.map((hour) => timeRow(hour)).join('')}
+          ${timelineHours().map((hour) => timeRow(hour)).join('')}
         </div>
       </section>
       <footer><span>Keep the day, one square at a time.</span><span>${selectedDate.replaceAll('-', '.')}</span></footer>
@@ -303,7 +331,7 @@ function render() {
 
 function timeRow(hour) {
   const plans = state.plans.filter((plan) => plan.journalDate === selectedDate && plan.scheduledHour === hour);
-  const logs = state.executions.filter((log) => log.journalDate === selectedDate && new Date(log.executedAt).getHours() === hour);
+  const logs = state.executions.filter((log) => log.journalDate === selectedDate && koreanHour(log.executedAt) === hour);
   const activePlans = plans.filter((plan) => plan.status === 'planned');
   return `
     <div class="time-label">${hourLabel(hour)}<small>${String(hour).padStart(2, '0')}:00</small></div>
@@ -321,7 +349,7 @@ function timeRow(hour) {
     <div class="time-cell actual-cell" data-actual-hour="${hour}">
       ${logs.map((log) => {
         const voided = log.status === 'voided';
-        const executedTime = new Date(log.executedAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
+        const executedTime = new Date(log.executedAt).toLocaleTimeString('ko-KR', { timeZone: JOURNAL_TIME_ZONE, hour: '2-digit', minute: '2-digit', hour12: false });
         return `<div class="actual-item ${voided ? 'voided' : ''}"><span class="check-mark">${voided ? '–' : '✓'}</span><span><strong>${escapeHtml(log.titleSnapshot)}</strong><small>${executedTime}${log.source === 'plan' ? ' · 계획에서 실행' : ' · 직접 기록'}</small></span>${voided ? '<small class="history-state">실행 취소</small>' : `<button type="button" class="cancel-action" data-remove-log="${log.id}">실행 취소</button>`}</div>`;
       }).join('')}
       <form class="quick-log" data-log-form="${hour}"><input placeholder="실행 내용 기록" aria-label="${hourLabel(hour)} 실행 내용" /><button aria-label="기록 추가">＋</button></form>
@@ -539,8 +567,9 @@ function bindEvents() {
     const item = state.plans.find((plan) => plan.id === checkbox.dataset.commit && plan.status === 'planned');
     if (!item) return;
     const now = new Date();
-    const executionHour = Math.min(HOURS.at(-1), Math.max(HOURS[0], now.getHours()));
-    const executedAt = `${selectedDate}T${String(executionHour).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
+    const kst = koreanClock(now);
+    const executionHour = kst.hour;
+    const executedAt = `${selectedDate}T${String(executionHour).padStart(2, '0')}:${String(kst.minute).padStart(2, '0')}:${String(kst.second).padStart(2, '0')}+09:00`;
     const draft = {
       id: crypto.randomUUID(), taskId: item.taskId, planId: item.id, journalDate: selectedDate,
       executedAt, titleSnapshot: item.titleSnapshot, source: 'plan', status: 'recorded',
@@ -585,7 +614,7 @@ function bindEvents() {
     const timestamp = new Date().toISOString();
     const draft = {
       id: crypto.randomUUID(), taskId: null, planId: null, journalDate: selectedDate,
-      executedAt: `${selectedDate}T${String(hour).padStart(2, '0')}:00:00`, titleSnapshot: input.value.trim(),
+      executedAt: `${selectedDate}T${String(hour).padStart(2, '0')}:00:00+09:00`, titleSnapshot: input.value.trim(),
       source: 'manual', status: 'recorded', createdAt: timestamp, voidedAt: null,
     };
     if (authState.user) {
