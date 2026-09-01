@@ -1,4 +1,5 @@
 import './style.css';
+import { isSupabaseConfigured, supabase } from './supabase.js';
 
 const HOURS = Array.from({ length: 13 }, (_, index) => index + 8);
 const STORAGE_KEY = 'grid-journal-v1';
@@ -27,6 +28,14 @@ let editingTaskId = null;
 let selectedDate = isoToday;
 let calendarOpen = false;
 let calendarMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+let authState = {
+  loading: isSupabaseConfigured,
+  user: null,
+  modalOpen: false,
+  mode: 'login',
+  message: '',
+  error: '',
+};
 
 const app = document.querySelector('#app');
 
@@ -77,6 +86,29 @@ function calendarMarkup() {
   </div>`;
 }
 
+function authMarkup() {
+  if (!authState.modalOpen) return '';
+  const signingUp = authState.mode === 'signup';
+  return `<div class="auth-backdrop" data-close-auth>
+    <section class="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+      <button type="button" class="auth-close" data-close-auth aria-label="닫기">×</button>
+      <p class="eyebrow">PRIVATE JOURNAL</p>
+      <h2 id="auth-title">${signingUp ? '계정 만들기' : '기록에 로그인'}</h2>
+      <p class="auth-description">${signingUp ? '어디서든 같은 불릿저널을 이어서 기록하세요.' : '저장한 계획과 실행 기록을 다시 불러옵니다.'}</p>
+      ${authState.error ? `<p class="auth-feedback error">${escapeHtml(authState.error)}</p>` : ''}
+      ${authState.message ? `<p class="auth-feedback">${escapeHtml(authState.message)}</p>` : ''}
+      <form class="auth-form" id="auth-form">
+        <label>이메일<input type="email" name="email" autocomplete="email" required placeholder="name@example.com" /></label>
+        <label>비밀번호<input type="password" name="password" autocomplete="${signingUp ? 'new-password' : 'current-password'}" minlength="6" required placeholder="6자 이상" /></label>
+        <button type="submit">${signingUp ? '회원가입' : '로그인'}</button>
+      </form>
+      <button type="button" class="auth-switch" data-auth-mode="${signingUp ? 'login' : 'signup'}">
+        ${signingUp ? '이미 계정이 있나요? 로그인' : '처음인가요? 계정 만들기'}
+      </button>
+    </section>
+  </div>`;
+}
+
 function parseTask(input) {
   const value = input.trim();
   const dueMatch = value.match(/\s*\((\d{8})\)\s*$/);
@@ -101,12 +133,15 @@ function render() {
             <h1>오늘의 기록</h1>
           </div>
         </div>
-        <div class="date-picker-wrap">
+        <div class="header-actions">
+          ${authState.user ? `<div class="user-menu"><span>${escapeHtml(authState.user.email || '사용자')}</span><button type="button" id="logout-button">로그아웃</button></div>` : `<button type="button" class="login-button" id="login-button" ${!isSupabaseConfigured ? 'disabled' : ''}>${authState.loading ? '확인 중…' : '로그인'}</button>`}
+          <div class="date-picker-wrap">
           <button type="button" class="date-stamp" id="date-picker-button" aria-expanded="${calendarOpen}" aria-controls="calendar-panel">
             <strong>${String(displayDate.getMonth() + 1).padStart(2, '0')} / ${String(displayDate.getDate()).padStart(2, '0')}</strong>
             <span>${displayDate.getFullYear()} · ${shortDay}</span>
           </button>
           ${calendarOpen ? calendarMarkup() : ''}
+          </div>
         </div>
       </header>
 
@@ -158,6 +193,7 @@ function render() {
       <footer><span>Keep the day, one square at a time.</span><span>${selectedDate.replaceAll('-', '.')}</span></footer>
     </main>
     <div class="toast" role="status" aria-live="polite"></div>
+    ${authMarkup()}
   `;
   bindEvents();
 }
@@ -201,6 +237,50 @@ function addPlan(taskId, hour) {
 }
 
 function bindEvents() {
+  document.querySelector('#login-button')?.addEventListener('click', () => {
+    authState = { ...authState, modalOpen: true, error: '', message: '' };
+    render();
+    document.querySelector('#auth-form input')?.focus();
+  });
+
+  document.querySelector('#logout-button')?.addEventListener('click', async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) notify('로그아웃하지 못했어요. 다시 시도해주세요.');
+  });
+
+  document.querySelectorAll('[data-close-auth]').forEach((element) => element.addEventListener('click', (event) => {
+    if (event.currentTarget.classList.contains('auth-backdrop') && event.target !== event.currentTarget) return;
+    authState = { ...authState, modalOpen: false, error: '', message: '' };
+    render();
+  }));
+
+  document.querySelector('[data-auth-mode]')?.addEventListener('click', (event) => {
+    authState = { ...authState, mode: event.currentTarget.dataset.authMode, error: '', message: '' };
+    render();
+    document.querySelector('#auth-form input')?.focus();
+  });
+
+  document.querySelector('#auth-form')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const submit = form.querySelector('[type="submit"]');
+    const data = new FormData(form);
+    submit.disabled = true;
+    submit.textContent = '처리 중…';
+    const credentials = { email: data.get('email').trim(), password: data.get('password') };
+    const result = authState.mode === 'signup'
+      ? await supabase.auth.signUp(credentials)
+      : await supabase.auth.signInWithPassword(credentials);
+    if (result.error) {
+      authState = { ...authState, error: authErrorMessage(result.error.message), message: '' };
+    } else if (authState.mode === 'signup' && !result.data.session) {
+      authState = { ...authState, error: '', message: '확인 이메일을 보냈습니다. 인증 후 로그인해주세요.' };
+    } else {
+      authState = { ...authState, modalOpen: false, error: '', message: '' };
+    }
+    render();
+  });
+
   document.querySelector('#date-picker-button').addEventListener('click', () => {
     calendarOpen = !calendarOpen;
     render();
@@ -341,6 +421,14 @@ function bindEvents() {
   }));
 }
 
+function authErrorMessage(message) {
+  if (/invalid login credentials/i.test(message)) return '이메일 또는 비밀번호를 확인해주세요.';
+  if (/user already registered/i.test(message)) return '이미 가입된 이메일입니다.';
+  if (/email not confirmed/i.test(message)) return '이메일 인증을 먼저 완료해주세요.';
+  if (/password/i.test(message) && /characters|least/i.test(message)) return '비밀번호는 6자 이상이어야 합니다.';
+  return '요청을 처리하지 못했습니다. 잠시 후 다시 시도해주세요.';
+}
+
 function closeCalendarOnOutside(event) {
   if (event.target.closest('.date-picker-wrap')) return;
   calendarOpen = false;
@@ -348,6 +436,11 @@ function closeCalendarOnOutside(event) {
 }
 
 document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && authState.modalOpen) {
+    authState = { ...authState, modalOpen: false, error: '', message: '' };
+    render();
+    return;
+  }
   if (event.key === 'Escape' && calendarOpen && !editingTaskId) {
     calendarOpen = false;
     render();
@@ -355,3 +448,14 @@ document.addEventListener('keydown', (event) => {
 });
 
 render();
+
+if (supabase) {
+  supabase.auth.getSession().then(({ data }) => {
+    authState = { ...authState, loading: false, user: data.session?.user || null };
+    render();
+  });
+  supabase.auth.onAuthStateChange((_event, session) => {
+    authState = { ...authState, loading: false, user: session?.user || null };
+    render();
+  });
+}
