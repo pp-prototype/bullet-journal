@@ -16,9 +16,23 @@ button { color: inherit; }
 .eyebrow, .section-no, .column-title span, footer, .date-stamp span { font-family: 'IBM Plex Mono', monospace; letter-spacing: .12em; }
 .eyebrow { margin: 0 0 3px; font-size: 11px; font-weight: 600; }
 h1 { margin: 0; font-size: clamp(27px, 4vw, 40px); line-height: 1; letter-spacing: -.08em; }
-.date-stamp { text-align: right; display: grid; gap: 2px; }
+.date-picker-wrap { position: relative; }
+.date-stamp { text-align: right; display: grid; gap: 2px; padding: 5px 7px; border: 1px solid transparent; background: transparent; cursor: pointer; }
+.date-stamp:hover, .date-stamp[aria-expanded='true'] { border-color: #555853; background: #ebe8dd; box-shadow: 3px 3px 0 #a6a79f; }
 .date-stamp strong { font: 600 25px 'IBM Plex Mono', monospace; }
 .date-stamp span { font-size: 10px; }
+.calendar-panel { position: absolute; z-index: 20; top: calc(100% + 10px); right: 0; width: 300px; padding: 13px; border: 1px solid #4e514d; background-color: #f6f3ea; background-image: linear-gradient(#dedbd0 1px, transparent 1px), linear-gradient(90deg, #dedbd0 1px, transparent 1px); background-size: 18px 18px; box-shadow: 6px 6px 0 #8e9088; }
+.calendar-head { display: grid; grid-template-columns: 32px 1fr 32px; align-items: center; margin-bottom: 10px; border-bottom: 2px solid #555853; padding-bottom: 9px; }
+.calendar-head strong { text-align: center; font: 600 14px 'IBM Plex Mono', monospace; }
+.calendar-head button { width: 30px; height: 28px; border: 1px solid #747670; background: #eeebe2; cursor: pointer; }
+.calendar-weekdays, .calendar-days { display: grid; grid-template-columns: repeat(7, 1fr); }
+.calendar-weekdays span { padding: 4px 0 7px; text-align: center; color: #777972; font: 9px 'IBM Plex Mono', monospace; }
+.calendar-day { aspect-ratio: 1; border: 0; border-right: 1px solid #d0cec5; border-bottom: 1px solid #d0cec5; background: rgba(248,246,238,.86); font: 11px 'IBM Plex Mono', monospace; cursor: pointer; }
+.calendar-day:hover { background: #dcd9cd; outline: 1px solid #555853; }
+.calendar-day.outside { color: #aaa9a2; background: rgba(232,229,220,.75); }
+.calendar-day.today { box-shadow: inset 0 0 0 1px #555853; font-weight: 600; }
+.calendar-day.selected { background: #50534f; color: #f8f5ed; }
+.today-button { width: 100%; margin-top: 11px; padding: 7px; border: 1px solid #555853; background: #e8e5dc; font: 10px 'IBM Plex Mono', monospace; cursor: pointer; }
 .task-board, .journal { margin-top: 30px; }
 .section-heading { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 13px; }
 .section-heading > div:first-child { display: flex; align-items: center; gap: 10px; }
@@ -38,6 +52,13 @@ h1 { margin: 0; font-size: clamp(27px, 4vw, 40px); line-height: 1; letter-spacin
 .task-copy strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 14px; }
 .task-copy small { color: #777871; font: 10px 'IBM Plex Mono', monospace; margin-top: 2px; }
 .remove-task { border: 0; background: transparent; font: 18px 'IBM Plex Mono', monospace; cursor: pointer; opacity: .45; }
+.edit-task { flex: 0 0 auto; padding: 2px 5px; border: 0; border-bottom: 1px solid #999b94; background: transparent; color: #777972; font-size: 10px; cursor: pointer; }
+.edit-task:hover { color: #343633; border-color: #343633; }
+.task-edit-card { cursor: default; gap: 6px; padding: 8px; }
+.task-edit-card .edit-mark { padding: 0 3px; }
+.task-edit-card input { flex: 1; min-width: 0; height: 30px; padding: 0 8px; border: 1px solid #696c67; outline: 0; background: #faf8f1; font-size: 12px; }
+.task-edit-card button { height: 30px; padding: 0 7px; border: 1px solid #696c67; background: #efede5; font-size: 10px; cursor: pointer; }
+.task-edit-card button[type='submit'] { background: #50534f; color: #f7f4eb; }
 .empty-tasks { grid-column: 1/-1; text-align: center; color: #777972; border: 1px dashed #96978f; margin: 0; padding: 18px; background: #f3f0e7; }
 .mobile-hint { display: none; margin: 9px 0 0; color: #777972; font-size: 11px; }
 .journal-heading { border-bottom: 1px solid #555853; padding-bottom: 9px; }
@@ -82,6 +103,7 @@ footer { display: flex; justify-content: space-between; margin-top: 22px; font-s
   .brand-mark { display: none; }
   .date-stamp strong { font-size: 18px; }
   .date-stamp span { letter-spacing: 0; }
+  .calendar-panel { width: min(300px, calc(100vw - 42px)); }
   .section-heading p { display: none; }
   .task-list { grid-template-columns: 1fr; }
   .mobile-hint { display: block; }

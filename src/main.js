@@ -3,8 +3,8 @@ import './style.css';
 const HOURS = Array.from({ length: 13 }, (_, index) => index + 8);
 const STORAGE_KEY = 'grid-journal-v1';
 const today = new Date();
-const isoToday = today.toISOString().slice(0, 10);
-const shortDay = new Intl.DateTimeFormat('ko-KR', { weekday: 'long' }).format(today);
+const toLocalISO = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+const isoToday = toLocalISO(today);
 
 const defaultState = {
   tasks: [
@@ -23,6 +23,10 @@ try {
 }
 
 let selectedTaskId = null;
+let editingTaskId = null;
+let selectedDate = isoToday;
+let calendarOpen = false;
+let calendarMonth = new Date(today.getFullYear(), today.getMonth(), 1);
 
 const app = document.querySelector('#app');
 
@@ -44,12 +48,47 @@ function dueLabel(value) {
   return `${Number(value.slice(4, 6))}월 ${Number(value.slice(6))}일`;
 }
 
+function dateFromISO(value) {
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function calendarMarkup() {
+  const year = calendarMonth.getFullYear();
+  const month = calendarMonth.getMonth();
+  const mondayOffset = (new Date(year, month, 1).getDay() + 6) % 7;
+  const firstCell = new Date(year, month, 1 - mondayOffset);
+  const cells = Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(firstCell);
+    date.setDate(firstCell.getDate() + index);
+    const iso = toLocalISO(date);
+    const classes = [date.getMonth() !== month ? 'outside' : '', iso === isoToday ? 'today' : '', iso === selectedDate ? 'selected' : ''].filter(Boolean).join(' ');
+    return `<button type="button" class="calendar-day ${classes}" data-calendar-date="${iso}" aria-label="${iso}">${date.getDate()}</button>`;
+  }).join('');
+  return `<div class="calendar-panel" id="calendar-panel">
+    <div class="calendar-head">
+      <button type="button" data-calendar-prev aria-label="이전 달">←</button>
+      <strong>${year}년 ${month + 1}월</strong>
+      <button type="button" data-calendar-next aria-label="다음 달">→</button>
+    </div>
+    <div class="calendar-weekdays">${['월','화','수','목','금','토','일'].map((day) => `<span>${day}</span>`).join('')}</div>
+    <div class="calendar-days">${cells}</div>
+    <button type="button" class="today-button" data-calendar-today>오늘로 돌아가기</button>
+  </div>`;
+}
+
 function parseTask(input) {
-  const match = input.trim().match(/^(.*?)(?:\s*\((\d{8})\))?$/);
-  return { title: match?.[1]?.trim() || '', due: match?.[2] || '' };
+  const value = input.trim();
+  const dueMatch = value.match(/\s*\((\d{8})\)\s*$/);
+  return {
+    title: dueMatch ? value.slice(0, dueMatch.index).trim() : value,
+    due: dueMatch?.[1] || '',
+  };
 }
 
 function render() {
+  const displayDate = dateFromISO(selectedDate);
+  const shortDay = new Intl.DateTimeFormat('ko-KR', { weekday: 'long' }).format(displayDate);
   const plannedTaskIds = new Set(Object.values(state.plan).flat().map((item) => item.id));
   const openTasks = state.tasks.filter((task) => !plannedTaskIds.has(task.id));
   app.innerHTML = `
@@ -62,9 +101,12 @@ function render() {
             <h1>오늘의 기록</h1>
           </div>
         </div>
-        <div class="date-stamp">
-          <strong>${String(today.getMonth() + 1).padStart(2, '0')} / ${String(today.getDate()).padStart(2, '0')}</strong>
-          <span>${today.getFullYear()} · ${shortDay}</span>
+        <div class="date-picker-wrap">
+          <button type="button" class="date-stamp" id="date-picker-button" aria-expanded="${calendarOpen}" aria-controls="calendar-panel">
+            <strong>${String(displayDate.getMonth() + 1).padStart(2, '0')} / ${String(displayDate.getDate()).padStart(2, '0')}</strong>
+            <span>${displayDate.getFullYear()} · ${shortDay}</span>
+          </button>
+          ${calendarOpen ? calendarMarkup() : ''}
         </div>
       </header>
 
@@ -82,10 +124,17 @@ function render() {
           <button type="submit">추가</button>
         </form>
         <div class="task-list" id="task-list">
-          ${openTasks.length ? openTasks.map((task) => `
+          ${openTasks.length ? openTasks.map((task) => editingTaskId === task.id ? `
+            <form class="task-card task-edit-card" data-edit-form="${task.id}">
+              <span class="edit-mark" aria-hidden="true">✎</span>
+              <input value="${escapeHtml(`${task.title}${task.due ? ` (${task.due})` : ''}`)}" aria-label="할 일과 마감일 수정" />
+              <button type="submit">저장</button>
+              <button type="button" data-cancel-edit>취소</button>
+            </form>` : `
             <article class="task-card ${selectedTaskId === task.id ? 'selected' : ''}" draggable="true" data-task-id="${task.id}" tabindex="0">
               <span class="drag-handle" aria-hidden="true">⠿</span>
               <span class="task-copy"><strong>${escapeHtml(task.title)}</strong>${task.due ? `<small>마감 · ${dueLabel(task.due)}</small>` : '<small>기한 없음</small>'}</span>
+              <button class="edit-task" type="button" data-edit="${task.id}" aria-label="할 일 수정">수정</button>
               <button class="remove-task" type="button" data-remove="${task.id}" aria-label="할 일 삭제">×</button>
             </article>`).join('') : '<p class="empty-tasks">목록이 비어 있어요. 오늘 할 일을 하나 적어보세요.</p>'}
         </div>
@@ -106,7 +155,7 @@ function render() {
           ${HOURS.map((hour) => timeRow(hour)).join('')}
         </div>
       </section>
-      <footer><span>Keep the day, one square at a time.</span><span>${isoToday.replaceAll('-', '.')}</span></footer>
+      <footer><span>Keep the day, one square at a time.</span><span>${selectedDate.replaceAll('-', '.')}</span></footer>
     </main>
     <div class="toast" role="status" aria-live="polite"></div>
   `;
@@ -152,6 +201,37 @@ function addPlan(taskId, hour) {
 }
 
 function bindEvents() {
+  document.querySelector('#date-picker-button').addEventListener('click', () => {
+    calendarOpen = !calendarOpen;
+    render();
+  });
+
+  document.querySelector('[data-calendar-prev]')?.addEventListener('click', () => {
+    calendarMonth = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1);
+    render();
+  });
+  document.querySelector('[data-calendar-next]')?.addEventListener('click', () => {
+    calendarMonth = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1);
+    render();
+  });
+  document.querySelector('[data-calendar-today]')?.addEventListener('click', () => {
+    selectedDate = isoToday;
+    calendarMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    calendarOpen = false;
+    render();
+  });
+  document.querySelectorAll('[data-calendar-date]').forEach((button) => button.addEventListener('click', () => {
+    selectedDate = button.dataset.calendarDate;
+    const chosen = dateFromISO(selectedDate);
+    calendarMonth = new Date(chosen.getFullYear(), chosen.getMonth(), 1);
+    calendarOpen = false;
+    render();
+  }));
+
+  if (calendarOpen) {
+    setTimeout(() => document.addEventListener('click', closeCalendarOnOutside, { once: true }), 0);
+  }
+
   document.querySelector('#task-form').addEventListener('submit', (event) => {
     event.preventDefault();
     const input = document.querySelector('#task-input');
@@ -162,7 +242,7 @@ function bindEvents() {
     save(); render();
   });
 
-  document.querySelectorAll('.task-card').forEach((card) => {
+  document.querySelectorAll('.task-card[data-task-id]').forEach((card) => {
     card.addEventListener('dragstart', (event) => {
       event.dataTransfer.setData('text/plain', card.dataset.taskId);
       event.dataTransfer.effectAllowed = 'copy';
@@ -183,6 +263,38 @@ function bindEvents() {
     state.tasks = state.tasks.filter((task) => task.id !== button.dataset.remove);
     Object.keys(state.plan).forEach((hour) => { state.plan[hour] = state.plan[hour].filter((item) => item.id !== button.dataset.remove); });
     save(); render();
+  }));
+
+  document.querySelectorAll('[data-edit]').forEach((button) => button.addEventListener('click', () => {
+    editingTaskId = button.dataset.edit;
+    selectedTaskId = null;
+    render();
+    const input = document.querySelector('[data-edit-form] input');
+    input?.focus();
+    input?.select();
+  }));
+
+  document.querySelectorAll('[data-edit-form]').forEach((form) => {
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const parsed = parseTask(form.querySelector('input').value);
+      if (!parsed.title) return notify('할 일 내용을 입력해주세요.');
+      const taskId = form.dataset.editForm;
+      state.tasks = state.tasks.map((task) => task.id === taskId ? { ...task, ...parsed } : task);
+      Object.keys(state.plan).forEach((hour) => {
+        state.plan[hour] = state.plan[hour].map((plan) => plan.id === taskId ? { ...plan, title: parsed.title } : plan);
+      });
+      editingTaskId = null;
+      save(); render(); notify('할 일을 수정했어요.');
+    });
+    form.querySelector('input').addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') { editingTaskId = null; render(); }
+    });
+  });
+
+  document.querySelectorAll('[data-cancel-edit]').forEach((button) => button.addEventListener('click', () => {
+    editingTaskId = null;
+    render();
   }));
 
   document.querySelectorAll('.plan-cell').forEach((cell) => {
@@ -228,5 +340,18 @@ function bindEvents() {
     save(); render();
   }));
 }
+
+function closeCalendarOnOutside(event) {
+  if (event.target.closest('.date-picker-wrap')) return;
+  calendarOpen = false;
+  render();
+}
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && calendarOpen && !editingTaskId) {
+    calendarOpen = false;
+    render();
+  }
+});
 
 render();
