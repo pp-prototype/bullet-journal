@@ -169,6 +169,8 @@ footer { display: flex; justify-content: space-between; margin-top: 22px; font-s
 .task-folder > .task-list { grid-template-columns: minmax(0, 1fr); padding: 0 12px 12px; margin-top: 0; }
 #new-task-folder { font: inherit; font-size: 11px; max-width: 85px; min-width: 0; border: 1px solid #92948c; background: #faf8f1; }
 #new-task-folder { border-width: 0 1px 0 0; }
+.folder-creator input:focus, #new-task-folder:focus { outline: none; border-color: #77715f; box-shadow: inset 0 0 0 1px #a49b83; }
+.folder-creator summary:focus-visible { outline: 2px solid #a49b83; outline-offset: 3px; }
 @media (max-width: 600px) {
   .task-form .prompt { width: 28px; flex-shrink: 0; }
   #new-task-folder { max-width: 70px; }

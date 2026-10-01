@@ -386,7 +386,7 @@ function render() {
           <p>할 일을 폴더나 시간표로 끌어다 놓으세요</p>
         </div>
         <details class="folder-creator">
-          <summary>＋ 새 폴더</summary>
+          <summary><span aria-hidden="true">📁</span> 새 폴더</summary>
           <form id="folder-form">
             <input name="folderName" maxlength="60" required placeholder="폴더 이름" aria-label="새 폴더 이름" autocomplete="off" />
             <button type="submit">만들기</button>
