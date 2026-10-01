@@ -88,6 +88,8 @@ function normalizeState(raw) {
   return { tasks: tasks.length ? tasks : structuredClone(defaultState.tasks), plans, executions, modelVersion: 2 };
 }
 
+const pendingPlans = new Set();
+let toastTimer;
 let selectedTaskId = null;
 let editingTaskId = null;
 let selectedDate = isoToday;
@@ -246,13 +248,82 @@ function parseTask(input) {
 
 function timelineHours() {
   const hours = new Set(HOURS);
+  state.plans
+    .filter((plan) => plan.journalDate === selectedDate)
+    .forEach((plan) => hours.add(plan.scheduledHour));
   state.executions
     .filter((log) => log.journalDate === selectedDate && log.status === 'recorded')
     .forEach((log) => hours.add(koreanHour(log.executedAt)));
   return [...hours].sort((a, b) => a - b);
 }
 
+// Folder preview metadata stays on this browser, isolated by account.
+function folderStorageKey() {
+  return `grid-journal-folders-v1:${authState.user?.id || 'guest'}`;
+}
+
+function readFolders() {
+  try {
+    const value = JSON.parse(localStorage.getItem(folderStorageKey()));
+    if (Array.isArray(value?.folders) && value.assignments && typeof value.assignments === 'object') return value;
+  } catch { /* Start empty when stored preview data cannot be read. */ }
+  return { folders: [], assignments: {} };
+}
+
+function saveFolders(workspace, key = folderStorageKey()) {
+  try {
+    localStorage.setItem(key, JSON.stringify(workspace));
+    return true;
+  } catch {
+    notify('폴더를 저장하지 못했어요. 브라우저 저장 공간을 확인해주세요.');
+    return false;
+  }
+}
+
+function moveTaskToFolder(taskId, folderId) {
+  const workspace = readFolders();
+  if (!state.tasks.some((task) => task.id === taskId && task.status === 'open')) return;
+  if (folderId && !workspace.folders.some((folder) => folder.id === folderId)) return;
+  if ((workspace.assignments[taskId] || '') === folderId) return;
+  if (folderId) workspace.assignments[taskId] = folderId;
+  else delete workspace.assignments[taskId];
+  if (!saveFolders(workspace)) return;
+  selectedTaskId = null;
+  render();
+  notify(folderId ? '폴더로 옮겼어요.' : '미분류로 옮겼어요.');
+}
+
+function folderOptions(folders, selected = '') {
+  return `<option value="">미분류</option>${folders.map((folder) => `<option value="${folder.id}" ${folder.id === selected ? 'selected' : ''}>${escapeHtml(folder.name)}</option>`).join('')}`;
+}
+
+function taskCards(tasks) {
+  return `          ${tasks.length ? tasks.map((task) => editingTaskId === task.id ? `
+            <form class="task-card task-edit-card" data-edit-form="${task.id}">
+              <span class="edit-mark" aria-hidden="true">✎</span>
+              <input value="${escapeHtml(`${task.title}${task.dueDate ? ` (${task.dueDate.replaceAll('-', '')})` : ''}`)}" aria-label="할 일과 마감일 수정" />
+              <button type="submit">저장</button>
+              <button type="button" data-cancel-edit>취소</button>
+            </form>` : `
+            <article class="task-card ${selectedTaskId === task.id ? 'selected' : ''}" draggable="true" data-task-id="${task.id}" tabindex="0">
+              <div class="time-flags" role="group" aria-label="계획 시간 선택">
+                ${[9, 13, 15].map((hour) => `<button type="button" class="time-flag" data-plan-task="${task.id}" data-plan-hour="${hour}" aria-label="${escapeHtml(task.title)}: ${selectedDate} ${hourLabel(hour)}에 계획">${String(hour).padStart(2, '0')}시</button>`).join('')}
+                <button type="button" class="time-flag time-flag-more" data-time-picker="${task.id}" aria-label="다른 계획 시간 선택" aria-expanded="false" aria-controls="time-picker-${task.id}">＋</button>
+              </div>
+              <div class="time-picker" id="time-picker-${task.id}" hidden>
+                <p>${selectedDate} · 계획 시간</p>
+                <div>${Array.from({ length: 24 }, (_, hour) => `<button type="button" data-plan-task="${task.id}" data-plan-hour="${hour}">${String(hour).padStart(2, '0')}시</button>`).join('')}</div>
+              </div>
+              <span class="drag-handle" aria-hidden="true">⠿</span>
+              <span class="task-copy"><strong>${escapeHtml(task.title)}</strong>${task.dueDate ? `<small class="task-due">마감 · ${dueLabel(task.dueDate)}</small>` : '<small>기한 없음</small>'}</span>
+              <button class="edit-task" type="button" data-edit="${task.id}" aria-label="할 일 수정">수정</button>
+              <button class="remove-task" type="button" data-remove="${task.id}" aria-label="할 일 삭제">×</button>
+            </article>`).join('') : '<p class="empty-tasks">표시할 할 일이 없어요.</p>'}`;
+}
+
 function render() {
+  const workspace = readFolders();
+  const folders = workspace.folders;
   const displayDate = dateFromISO(selectedDate);
   const shortDay = new Intl.DateTimeFormat('ko-KR', { weekday: 'long' }).format(displayDate);
   const plannedTaskIds = new Set(state.plans.filter((plan) => plan.journalDate === selectedDate && plan.status === 'planned').map((plan) => plan.taskId));
@@ -285,27 +356,33 @@ function render() {
             <span class="section-no">01</span>
             <h2 id="task-heading">할 일 목록</h2>
           </div>
-          <p>할 일을 시간표로 끌어다 놓으세요</p>
+          <p>할 일을 폴더나 시간표로 끌어다 놓으세요</p>
         </div>
+        <details class="folder-creator">
+          <summary>＋ 새 폴더</summary>
+          <form id="folder-form">
+            <input name="folderName" maxlength="60" required placeholder="폴더 이름" aria-label="새 폴더 이름" autocomplete="off" />
+            <button type="submit">만들기</button>
+          </form>
+        </details>
+        <p class="folder-preview-note">폴더는 이 브라우저에 저장됩니다.</p>
         <form class="task-form" id="task-form">
           <span class="prompt">＋</span>
+          ${folders.length ? `<select id="new-task-folder" aria-label="새 할 일 폴더">${folderOptions(folders)}</select>` : ''}
           <input id="task-input" autocomplete="off" placeholder="새 할 일 (마감일 YYYYMMDD)" aria-label="새 할 일" />
           <button type="submit">추가</button>
         </form>
-        <div class="task-list" id="task-list">
-          ${openTasks.length ? openTasks.map((task) => editingTaskId === task.id ? `
-            <form class="task-card task-edit-card" data-edit-form="${task.id}">
-              <span class="edit-mark" aria-hidden="true">✎</span>
-              <input value="${escapeHtml(`${task.title}${task.dueDate ? ` (${task.dueDate.replaceAll('-', '')})` : ''}`)}" aria-label="할 일과 마감일 수정" />
-              <button type="submit">저장</button>
-              <button type="button" data-cancel-edit>취소</button>
-            </form>` : `
-            <article class="task-card ${selectedTaskId === task.id ? 'selected' : ''}" draggable="true" data-task-id="${task.id}" tabindex="0">
-              <span class="drag-handle" aria-hidden="true">⠿</span>
-              <span class="task-copy"><strong>${escapeHtml(task.title)}</strong>${task.dueDate ? `<small>마감 · ${dueLabel(task.dueDate)}</small>` : '<small>기한 없음</small>'}</span>
-              <button class="edit-task" type="button" data-edit="${task.id}" aria-label="할 일 수정">수정</button>
-              <button class="remove-task" type="button" data-remove="${task.id}" aria-label="할 일 삭제">×</button>
-            </article>`).join('') : '<p class="empty-tasks">목록이 비어 있어요. 오늘 할 일을 하나 적어보세요.</p>'}
+        ${folders.length ? `<div class="folder-grid" aria-label="폴더 목록">
+          ${folders.map((folder) => `<details class="task-folder" data-folder="${folder.id}" data-folder-drop="${folder.id}" ${folder.collapsed ? '' : 'open'}>
+            <summary><span>${escapeHtml(folder.name)}</span><small>남은 ${state.tasks.filter((task) => task.status === 'open' && workspace.assignments[task.id] === folder.id).length}</small></summary>
+            <div class="task-list">${taskCards(openTasks.filter((task) => workspace.assignments[task.id] === folder.id))}</div>
+          </details>`).join('')}
+        </div>` : ''}
+        <div class="unfiled-tasks" data-folder-drop="">
+          ${folders.length ? `<h3 class="folder-label">미분류 <small>폴더 밖으로 꺼내려면 여기에 놓으세요</small></h3>` : ''}
+          <div class="task-list" id="task-list">
+            ${taskCards(openTasks.filter((task) => !folders.some((folder) => folder.id === workspace.assignments[task.id])))}
+          </div>
         </div>
         <p class="mobile-hint">모바일에서는 할 일을 누른 다음 계획 시간대를 선택하세요.</p>
       </section>
@@ -358,34 +435,91 @@ function timeRow(hour) {
     </div>`;
 }
 
-function notify(message) {
+function notify(message, undo) {
+  clearTimeout(toastTimer);
   const toast = document.querySelector('.toast');
   toast.textContent = message;
+  if (undo) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = '되돌리기';
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      clearTimeout(toastTimer);
+      await undo();
+    }, { once: true });
+    toast.append(button);
+  }
   toast.classList.add('show');
-  setTimeout(() => toast.classList.remove('show'), 1800);
+  toastTimer = setTimeout(() => toast.classList.remove('show'), undo ? 8000 : 1800);
+}
+
+async function undoPlanPlacement(planId) {
+  const plan = state.plans.find((item) => item.id === planId && item.status === 'planned');
+  if (!plan) return;
+  if (state.executions.some((log) => log.planId === planId && log.status === 'recorded')) return notify('이미 실행한 계획이에요.');
+  await performMutation(async () => {
+    const updated = authState.user ? await cancelPlan(planId) : { ...plan, status: 'cancelled', cancelledAt: new Date().toISOString() };
+    state.plans = state.plans.map((item) => item.id === planId ? updated : item);
+  }, '계획 배치를 되돌렸어요.');
 }
 
 async function addPlan(taskId, hour) {
-  const task = state.tasks.find((item) => item.id === taskId);
-  if (!task) return;
-  if (state.plans.some((plan) => plan.taskId === taskId && plan.journalDate === selectedDate && plan.status === 'planned')) return notify('이미 오늘 계획에 배치된 할 일이에요.');
+  const task = state.tasks.find((item) => item.id === taskId && item.status === 'open');
+  const scheduledHour = Number(hour);
+  if (!task || !Number.isInteger(scheduledHour) || scheduledHour < 0 || scheduledHour > 23) return;
+  const journalDate = selectedDate;
+  const userId = authState.user?.id;
+  const key = `${userId || 'guest'}:${journalDate}:${taskId}`;
+  if (pendingPlans.has(key)) return;
+  if (state.plans.some((plan) => plan.taskId === taskId && plan.journalDate === journalDate && plan.status === 'planned')) return notify('이미 선택한 날짜의 계획에 배치된 할 일이에요.');
   const draft = {
-    id: crypto.randomUUID(), taskId: task.id, journalDate: selectedDate, scheduledHour: Number(hour),
+    id: crypto.randomUUID(), taskId: task.id, journalDate, scheduledHour,
     titleSnapshot: task.title, status: 'planned', createdAt: new Date().toISOString(), cancelledAt: null,
   };
-  if (authState.user) {
-    const success = await performMutation(async () => {
-      state.plans.push(await insertPlan(authState.user.id, draft));
-    });
-    if (!success) return;
-  } else {
-    state.plans.push(draft);
+  pendingPlans.add(key);
+  try {
+    const created = userId ? await insertPlan(userId, draft) : draft;
+    if (authState.user?.id !== userId || selectedDate !== journalDate) return;
+    state.plans.push(created);
+    selectedTaskId = null;
+    save(); render();
+    notify(`${journalDate} ${hourLabel(scheduledHour)}에 배치했어요.`, () => undoPlanPlacement(created.id));
+  } catch (error) {
+    console.error(error);
+    notify('계획을 저장하지 못했어요. 다시 시도해주세요.');
+  } finally {
+    pendingPlans.delete(key);
   }
-  selectedTaskId = null;
-  save(); render(); notify(`${hourLabel(Number(hour))}에 배치했어요.`);
 }
 
+function closeTimePickers() {
+  document.querySelectorAll('.time-picker').forEach((picker) => { picker.hidden = true; });
+  document.querySelectorAll('[data-time-picker]').forEach((button) => button.setAttribute('aria-expanded', 'false'));
+}
+
+document.addEventListener('click', (event) => {
+  if (!event.target.closest('.time-picker, [data-time-picker]')) closeTimePickers();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  const trigger = document.querySelector('[data-time-picker][aria-expanded="true"]');
+  closeTimePickers();
+  trigger?.focus();
+});
+
 function bindEvents() {
+  document.querySelectorAll('[data-plan-task]').forEach((button) => button.addEventListener('click', () => {
+    addPlan(button.dataset.planTask, button.dataset.planHour);
+  }));
+  document.querySelectorAll('[data-time-picker]').forEach((button) => button.addEventListener('click', () => {
+    const picker = document.getElementById(button.getAttribute('aria-controls'));
+    const opening = picker.hidden;
+    closeTimePickers();
+    picker.hidden = !opening;
+    button.setAttribute('aria-expanded', String(opening));
+    if (opening) picker.querySelector('button').focus();
+  }));
   document.querySelector('#login-button')?.addEventListener('click', () => {
     authState = { ...authState, modalOpen: true, error: '', message: '' };
     render();
@@ -463,12 +597,58 @@ function bindEvents() {
     setTimeout(() => document.addEventListener('click', closeCalendarOnOutside, { once: true }), 0);
   }
 
+  document.querySelector('#folder-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const input = event.currentTarget.elements.folderName;
+    const name = input.value.trim();
+    if (!name) { input.focus(); return; }
+    const workspace = readFolders();
+    if (workspace.folders.some((folder) => folder.name === name)) return notify('같은 이름의 폴더가 있어요.');
+    const id = crypto.randomUUID();
+    workspace.folders.push({ id, name, collapsed: false });
+    if (!saveFolders(workspace)) return;
+    render();
+    document.querySelector('#new-task-folder').value = id;
+    document.querySelector('#task-input').focus();
+  });
+  document.querySelectorAll('[data-folder]').forEach((details) => details.addEventListener('toggle', () => {
+    if (!details.isConnected) return;
+    const workspace = readFolders();
+    const folder = workspace.folders.find((item) => item.id === details.dataset.folder);
+    if (!folder || folder.collapsed === !details.open) return;
+    folder.collapsed = !details.open;
+    saveFolders(workspace);
+  }));
+  document.querySelectorAll('[data-folder-drop]').forEach((target) => {
+    target.addEventListener('dragover', (event) => {
+      if (!draggingTaskId) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      target.classList.add('folder-drop-ready');
+    });
+    target.addEventListener('dragleave', (event) => {
+      if (!target.contains(event.relatedTarget)) target.classList.remove('folder-drop-ready');
+    });
+    target.addEventListener('drop', (event) => {
+      event.preventDefault();
+      const taskId = draggingTaskId;
+      target.classList.remove('folder-drop-ready');
+      if (!taskId || event.dataTransfer.getData('text/plain') !== taskId) return;
+      const folderId = target.dataset.folderDrop;
+      stopDragScroll();
+      moveTaskToFolder(taskId, folderId);
+    });
+  });
+
   document.querySelector('#task-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const input = document.querySelector('#task-input');
     const parsed = parseTask(input.value);
     if (!parsed.title) return;
     if (parsed.due && !/^\d{8}$/.test(parsed.due)) return notify('마감일은 YYYYMMDD 형식으로 적어주세요.');
+    const folderId = document.querySelector('#new-task-folder')?.value || '';
+    const storageKey = folderStorageKey();
+    let createdTask;
     const timestamp = new Date().toISOString();
     const draft = {
       id: crypto.randomUUID(), title: parsed.title,
@@ -477,20 +657,31 @@ function bindEvents() {
     };
     if (authState.user) {
       const success = await performMutation(async () => {
-        state.tasks.unshift(await insertTask(authState.user.id, draft));
+        createdTask = await insertTask(authState.user.id, draft);
+        state.tasks.unshift(createdTask);
       });
       if (!success) return;
     } else {
+      createdTask = draft;
       state.tasks.unshift(draft);
     }
+    if (folderId && folderStorageKey() === storageKey) {
+      const workspace = readFolders();
+      workspace.assignments[createdTask.id] = folderId;
+      saveFolders(workspace, storageKey);
+    }
     save(); render();
+    const folderSelect = document.querySelector('#new-task-folder');
+    if (folderSelect) folderSelect.value = folderId;
   });
 
   document.querySelectorAll('.task-card[data-task-id]').forEach((card) => {
     card.addEventListener('dragstart', (event) => {
+      if (event.target.closest('button, input, .time-picker')) { event.preventDefault(); return; }
+      closeTimePickers();
       draggingTaskId = card.dataset.taskId;
       event.dataTransfer.setData('text/plain', card.dataset.taskId);
-      event.dataTransfer.effectAllowed = 'copy';
+      event.dataTransfer.effectAllowed = 'copyMove';
       card.classList.add('dragging');
       document.body.classList.add('is-dragging-task');
     });
@@ -499,11 +690,12 @@ function bindEvents() {
       stopDragScroll();
     });
     card.addEventListener('click', (event) => {
-      if (event.target.closest('button')) return;
+      if (event.target.closest('button, select, .time-picker')) return;
       selectedTaskId = selectedTaskId === card.dataset.taskId ? null : card.dataset.taskId;
       render();
     });
     card.addEventListener('keydown', (event) => {
+      if (event.target !== card) return;
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectedTaskId = card.dataset.taskId; render(); }
     });
   });
@@ -560,7 +752,7 @@ function bindEvents() {
   }));
 
   document.querySelectorAll('.plan-cell').forEach((cell) => {
-    cell.addEventListener('dragover', (event) => { event.preventDefault(); cell.classList.add('drop-ready'); });
+    cell.addEventListener('dragover', (event) => { if (!draggingTaskId) return; event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; cell.classList.add('drop-ready'); });
     cell.addEventListener('dragleave', () => cell.classList.remove('drop-ready'));
     cell.addEventListener('drop', (event) => { event.preventDefault(); addPlan(event.dataTransfer.getData('text/plain'), cell.dataset.hour); });
     cell.querySelector('.cell-placeholder')?.addEventListener('click', () => {
@@ -694,6 +886,7 @@ function runDragScroll() {
 }
 
 function stopDragScroll() {
+  document.querySelectorAll('.folder-drop-ready').forEach((target) => target.classList.remove('folder-drop-ready'));
   draggingTaskId = null;
   dragScrollSpeed = 0;
   document.body.classList.remove('is-dragging-task', 'drag-scroll-up', 'drag-scroll-down');
