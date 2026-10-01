@@ -160,7 +160,6 @@ footer { display: flex; justify-content: space-between; margin-top: 22px; font-s
 .folder-creator input { min-width: 0; padding: 8px; border: 1px solid #626560; background: #faf8f1; }
 .folder-creator button { border: 1px solid #626560; background: #efede5; cursor: pointer; }
 .folder-preview-note { font-size: 11px; color: #777871; margin: 6px 0 10px; }
-.folder-label { grid-column: 1 / -1; font-size: 13px; margin: 4px 0 0; }
 .task-folder { align-self: start; min-width: 0; border: 1px solid #626560; background: #efede5; }
 .task-folder > summary { display: flex; align-items: center; gap: 10px; padding: 12px; cursor: pointer; }
 .task-folder > summary::before { content: '▸'; }
@@ -176,10 +175,7 @@ footer { display: flex; justify-content: space-between; margin-top: 22px; font-s
 }
 
 .folder-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 12px; margin-top: 18px; }
-.unfiled-tasks { margin-top: 14px; padding: 8px; border: 1px dashed transparent; }
-.folder-label small { display: inline-block; margin-left: 8px; font-size: 11px; font-weight: normal; color: #777871; }
 .folder-drop-ready { outline: 2px solid #596b50; outline-offset: 2px; background: #dde5d5; }
-body.is-dragging-task .unfiled-tasks { border-color: #92948c; min-height: 90px; }
 @media (max-width: 760px) {
   .folder-grid { grid-template-columns: minmax(0, 1fr); }
 }

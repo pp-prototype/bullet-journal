@@ -372,17 +372,17 @@ function render() {
           <input id="task-input" autocomplete="off" placeholder="새 할 일 (마감일 YYYYMMDD)" aria-label="새 할 일" />
           <button type="submit">추가</button>
         </form>
-        ${folders.length ? `<div class="folder-grid" aria-label="폴더 목록">
+        <div class="folder-grid" aria-label="폴더 목록">
+          <details class="task-folder" data-unfiled-folder data-folder-drop="" ${workspace.unfiledCollapsed === false ? 'open' : ''}>
+            <summary><span>미분류</span><small>남은 ${state.tasks.filter((task) => task.status === 'open' && !folders.some((folder) => folder.id === workspace.assignments[task.id])).length}</small></summary>
+            <div class="task-list" id="task-list">
+              ${taskCards(openTasks.filter((task) => !folders.some((folder) => folder.id === workspace.assignments[task.id])))}
+            </div>
+          </details>
           ${folders.map((folder) => `<details class="task-folder" data-folder="${folder.id}" data-folder-drop="${folder.id}" ${folder.collapsed ? '' : 'open'}>
             <summary><span>${escapeHtml(folder.name)}</span><small>남은 ${state.tasks.filter((task) => task.status === 'open' && workspace.assignments[task.id] === folder.id).length}</small></summary>
             <div class="task-list">${taskCards(openTasks.filter((task) => workspace.assignments[task.id] === folder.id))}</div>
           </details>`).join('')}
-        </div>` : ''}
-        <div class="unfiled-tasks" data-folder-drop="">
-          ${folders.length ? `<h3 class="folder-label">미분류 <small>폴더 밖으로 꺼내려면 여기에 놓으세요</small></h3>` : ''}
-          <div class="task-list" id="task-list">
-            ${taskCards(openTasks.filter((task) => !folders.some((folder) => folder.id === workspace.assignments[task.id])))}
-          </div>
         </div>
         <p class="mobile-hint">모바일에서는 할 일을 누른 다음 계획 시간대를 선택하세요.</p>
       </section>
@@ -610,6 +610,14 @@ function bindEvents() {
     render();
     document.querySelector('#new-task-folder').value = id;
     document.querySelector('#task-input').focus();
+  });
+  document.querySelector('[data-unfiled-folder]').addEventListener('toggle', (event) => {
+    const details = event.currentTarget;
+    if (!details.isConnected) return;
+    const workspace = readFolders();
+    if ((workspace.unfiledCollapsed !== false) === !details.open) return;
+    workspace.unfiledCollapsed = !details.open;
+    saveFolders(workspace);
   });
   document.querySelectorAll('[data-folder]').forEach((details) => details.addEventListener('toggle', () => {
     if (!details.isConnected) return;
