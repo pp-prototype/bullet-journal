@@ -222,3 +222,23 @@ footer { display: flex; justify-content: space-between; margin-top: 22px; font-s
 .folder-picker-options button:disabled { color: #72776c; background: #e7e9e2; cursor: default; }
 .folder-picker-options button:focus-visible { outline: 2px solid #596b50; outline-offset: -3px; }
 .folder-picker > small { display: block; margin-top: 8px; color: #72776c; }
+
+.due-flag { min-width: 28px; background: #d9c3b8; border-color: #aa9183; color: #704f45; transform: rotate(-2deg); }
+.due-flag:hover, .due-flag[aria-expanded='true'] { background: #cbb0a2; }
+.task-card:has(.due-picker:not([hidden])) { z-index: 6; }
+.due-picker { position: absolute; top: calc(100% + 7px); left: 0; width: 100%; padding: 12px; border: 1px solid #aa9183; background: #f5efe4; box-shadow: 3px 4px 0 #78665725; cursor: default; }
+.due-picker[hidden], .due-picker form[hidden] { display: none; }
+.due-picker p { margin: 0 0 8px; font-size: 12px; color: #704f45; }
+.due-options { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.due-picker button { min-height: 34px; padding: 6px; border: 1px solid #b7a394; background: #e8dcd0; font-size: 11px; cursor: pointer; }
+.due-picker > button { width: 100%; margin-top: 6px; }
+.due-picker button:hover { background: #ddcbbd; }
+.due-picker form { display: flex; align-items: end; gap: 6px; margin-top: 8px; }
+.due-picker label { flex: 1; min-width: 0; font-size: 11px; }
+.due-picker input { width: 100%; min-width: 0; padding: 7px; border: 1px solid #b7a394; background: #faf7ef; }
+.due-picker small { display: block; margin-top: 8px; font-size: 10px; color: #7c6a5e; }
+.time-flags { gap: 3px; left: 6px; }
+@media (pointer: coarse) {
+  .time-flag { min-width: 33px; padding-left: 4px; padding-right: 4px; }
+  .due-flag { min-width: 28px; }
+}

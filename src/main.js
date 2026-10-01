@@ -317,6 +317,17 @@ function taskCards(tasks) {
                 ${[9, 13, 15].map((hour) => `<button type="button" class="time-flag" data-plan-task="${task.id}" data-plan-hour="${hour}" aria-label="${escapeHtml(task.title)}: ${selectedDate} ${hourLabel(hour)}에 계획">${String(hour).padStart(2, '0')}시</button>`).join('')}
                 <button type="button" class="time-flag time-flag-more" data-time-picker="${task.id}" aria-label="다른 계획 시간 선택" aria-expanded="false" aria-controls="time-picker-${task.id}">＋</button>
                 <button type="button" class="time-flag folder-flag" data-folder-picker="${task.id}" aria-label="${escapeHtml(task.title)} 폴더 분류" aria-expanded="false" aria-controls="folder-picker-${task.id}">폴더</button>
+                <button type="button" class="time-flag due-flag" data-due-picker="${task.id}" aria-label="${escapeHtml(task.title)} 마감 기한 설정" aria-expanded="false" aria-controls="due-picker-${task.id}">D</button>
+              </div>
+              <div class="due-picker" id="due-picker-${task.id}" role="group" aria-label="마감 기한 설정" hidden>
+                <p>마감 기한 설정</p>
+                <div class="due-options">${[['24', '24시간 이내'], ['48', '48시간 이내'], ['week', '이번 주 이내'], ['month', '이번 달 이내']].map(([value, label]) => `<button type="button" data-due-task="${task.id}" data-due-option="${value}">${label}</button>`).join('')}</div>
+                <button type="button" data-custom-due aria-expanded="false" aria-controls="due-form-${task.id}">시간 직접 설정</button>
+                <form id="due-form-${task.id}" data-due-form="${task.id}" hidden>
+                  <label>마감 날짜<input name="due" inputmode="numeric" pattern="[0-9]{8}" maxlength="8" required placeholder="YYYYMMDD" value="${task.dueDate ? task.dueDate.replaceAll('-', '') : ''}" /></label>
+                  <button type="submit">설정</button>
+                </form>
+                <small>한국 시간 기준 · 날짜 단위로 저장돼요.</small>
               </div>
               <div class="folder-picker" id="folder-picker-${task.id}" role="group" aria-label="이동할 폴더" hidden>
                 <p>이동할 폴더</p>
@@ -509,29 +520,83 @@ async function addPlan(taskId, hour) {
   }
 }
 
+function parseDueDate(value) {
+  if (!/^[0-9]{8}$/.test(value)) return null;
+  const year = Number(value.slice(0, 4));
+  const month = Number(value.slice(4, 6));
+  const day = Number(value.slice(6, 8));
+  if (year < 1000) return null;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
+}
+
+function presetDueDate(option, now = new Date()) {
+  const clock = koreanClock(now);
+  const date = new Date(Date.UTC(clock.year, clock.month - 1, clock.day));
+  if (option === '24' || option === '48') date.setUTCDate(date.getUTCDate() + Number(option) / 24);
+  else if (option === 'week') date.setUTCDate(date.getUTCDate() + (7 - date.getUTCDay()) % 7);
+  else if (option === 'month') date.setUTCMonth(date.getUTCMonth() + 1, 0);
+  else return null;
+  return date.toISOString().slice(0, 10);
+}
+
+const pendingDueUpdates = new Set();
+async function setTaskDueDate(taskId, dueDate) {
+  if (!dueDate || pendingDueUpdates.has(taskId)) return;
+  const userId = authState.user?.id;
+  pendingDueUpdates.add(taskId);
+  try {
+    const updated = userId ? await updateTask(taskId, { dueDate }) : null;
+    if (authState.user?.id !== userId) return;
+    state.tasks = state.tasks.map((task) => task.id === taskId ? (updated || { ...task, dueDate, updatedAt: new Date().toISOString() }) : task);
+    save(); render(); notify(`마감 기한을 ${dueDate}로 설정했어요.`);
+  } catch (error) {
+    console.error(error);
+    notify('마감 기한을 저장하지 못했어요. 다시 시도해주세요.');
+  } finally {
+    pendingDueUpdates.delete(taskId);
+  }
+}
+
 function closeTaskPickers() {
-  document.querySelectorAll('.time-picker, .folder-picker').forEach((picker) => { picker.hidden = true; });
-  document.querySelectorAll('[data-time-picker], [data-folder-picker]').forEach((button) => button.setAttribute('aria-expanded', 'false'));
+  document.querySelectorAll('.time-picker, .folder-picker, .due-picker').forEach((picker) => { picker.hidden = true; });
+  document.querySelectorAll('[data-time-picker], [data-folder-picker], [data-due-picker]').forEach((button) => button.setAttribute('aria-expanded', 'false'));
 }
 
 document.addEventListener('click', (event) => {
-  if (!event.target.closest('.time-picker, .folder-picker, [data-time-picker], [data-folder-picker]')) closeTaskPickers();
+  if (!event.target.closest('.time-picker, .folder-picker, .due-picker, [data-time-picker], [data-folder-picker], [data-due-picker]')) closeTaskPickers();
 });
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
-  const trigger = document.querySelector('[data-time-picker][aria-expanded="true"], [data-folder-picker][aria-expanded="true"]');
+  const trigger = document.querySelector('[data-time-picker][aria-expanded="true"], [data-folder-picker][aria-expanded="true"], [data-due-picker][aria-expanded="true"]');
   closeTaskPickers();
   trigger?.focus();
 });
 
 function bindEvents() {
+  document.querySelectorAll('[data-due-task]').forEach((button) => button.addEventListener('click', () => {
+    setTaskDueDate(button.dataset.dueTask, presetDueDate(button.dataset.dueOption));
+  }));
+  document.querySelectorAll('[data-custom-due]').forEach((button) => button.addEventListener('click', () => {
+    const form = document.getElementById(button.getAttribute('aria-controls'));
+    form.hidden = !form.hidden;
+    button.setAttribute('aria-expanded', String(!form.hidden));
+    if (!form.hidden) form.elements.due.focus();
+  }));
+  document.querySelectorAll('[data-due-form]').forEach((form) => form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const dueDate = parseDueDate(form.elements.due.value.trim());
+    if (!dueDate) { notify('실제 존재하는 날짜를 YYYYMMDD 형식으로 입력해주세요.'); form.elements.due.focus(); return; }
+    setTaskDueDate(form.dataset.dueForm, dueDate);
+  }));
   document.querySelectorAll('[data-classify-task]').forEach((button) => button.addEventListener('click', () => {
     moveTaskToFolder(button.dataset.classifyTask, button.dataset.destination);
   }));
   document.querySelectorAll('[data-plan-task]').forEach((button) => button.addEventListener('click', () => {
     addPlan(button.dataset.planTask, button.dataset.planHour);
   }));
-  document.querySelectorAll('[data-time-picker], [data-folder-picker]').forEach((button) => button.addEventListener('click', () => {
+  document.querySelectorAll('[data-time-picker], [data-folder-picker], [data-due-picker]').forEach((button) => button.addEventListener('click', () => {
     const picker = document.getElementById(button.getAttribute('aria-controls'));
     const opening = picker.hidden;
     closeTaskPickers();
@@ -704,7 +769,7 @@ function bindEvents() {
 
   document.querySelectorAll('.task-card[data-task-id]').forEach((card) => {
     card.addEventListener('dragstart', (event) => {
-      if (event.target.closest('button, input, .time-picker, .folder-picker')) { event.preventDefault(); return; }
+      if (event.target.closest('button, input, .time-picker, .folder-picker, .due-picker')) { event.preventDefault(); return; }
       closeTaskPickers();
       draggingTaskId = card.dataset.taskId;
       event.dataTransfer.setData('text/plain', card.dataset.taskId);
@@ -717,7 +782,7 @@ function bindEvents() {
       stopDragScroll();
     });
     card.addEventListener('click', (event) => {
-      if (event.target.closest('button, select, .time-picker, .folder-picker')) return;
+      if (event.target.closest('button, select, .time-picker, .folder-picker, .due-picker')) return;
       selectedTaskId = selectedTaskId === card.dataset.taskId ? null : card.dataset.taskId;
       render();
     });
