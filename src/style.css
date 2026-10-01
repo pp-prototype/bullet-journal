@@ -203,3 +203,22 @@ footer { display: flex; justify-content: space-between; margin-top: 22px; font-s
   .time-flags { top: -37px; height: 38px; }
   .time-flag { min-width: 42px; }
 }
+
+.task-folder[data-unfiled-folder] { grid-column: 1 / -1; }
+.task-folder[data-unfiled-folder] > .task-list { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 760px) {
+  .task-folder[data-unfiled-folder] > .task-list { grid-template-columns: minmax(0, 1fr); }
+}
+
+.folder-flag { margin-left: 3px; background: #d7e1cc; border-color: #91a080; color: #45533a; transform: rotate(1deg); }
+.folder-flag:hover, .folder-flag[aria-expanded='true'] { background: #bdd0aa; }
+.task-card:has(.folder-picker:not([hidden])) { z-index: 6; }
+.folder-picker { position: absolute; top: calc(100% + 7px); left: 0; width: 100%; padding: 12px; background: #f3f5ed; border: 1px solid #91a080; box-shadow: 3px 4px 0 #596b5033; cursor: default; }
+.folder-picker[hidden] { display: none; }
+.folder-picker p { margin: 0 0 8px; font-size: 12px; }
+.folder-picker-options { display: flex; flex-wrap: wrap; gap: 6px; max-height: 180px; overflow-y: auto; }
+.folder-picker-options button { max-width: 100%; min-height: 36px; padding: 7px 10px; border: 1px solid #91a080; background: #d7e1cc; overflow-wrap: anywhere; cursor: pointer; font-size: 12px; }
+.folder-picker-options button:hover:not(:disabled) { background: #bdd0aa; }
+.folder-picker-options button:disabled { color: #72776c; background: #e7e9e2; cursor: default; }
+.folder-picker-options button:focus-visible { outline: 2px solid #596b50; outline-offset: -3px; }
+.folder-picker > small { display: block; margin-top: 8px; color: #72776c; }

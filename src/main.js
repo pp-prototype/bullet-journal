@@ -280,17 +280,22 @@ function saveFolders(workspace, key = folderStorageKey()) {
   }
 }
 
-function moveTaskToFolder(taskId, folderId) {
+function moveTaskToFolder(taskId, folderId, offerUndo = true) {
+  const storageKey = folderStorageKey();
   const workspace = readFolders();
   if (!state.tasks.some((task) => task.id === taskId && task.status === 'open')) return;
   if (folderId && !workspace.folders.some((folder) => folder.id === folderId)) return;
   if ((workspace.assignments[taskId] || '') === folderId) return;
+  const previousFolderId = workspace.assignments[taskId] || '';
   if (folderId) workspace.assignments[taskId] = folderId;
   else delete workspace.assignments[taskId];
   if (!saveFolders(workspace)) return;
   selectedTaskId = null;
   render();
-  notify(folderId ? '폴더로 옮겼어요.' : '미분류로 옮겼어요.');
+  const folderName = workspace.folders.find((folder) => folder.id === folderId)?.name || '미분류';
+  notify(`${folderName}(으)로 옮겼어요.`, offerUndo ? () => {
+    if (folderStorageKey() === storageKey) moveTaskToFolder(taskId, previousFolderId, false);
+  } : undefined);
 }
 
 function folderOptions(folders, selected = '') {
@@ -298,6 +303,8 @@ function folderOptions(folders, selected = '') {
 }
 
 function taskCards(tasks) {
+  const workspace = readFolders();
+  const destinations = [{ id: '', name: '미분류' }, ...workspace.folders];
   return `          ${tasks.length ? tasks.map((task) => editingTaskId === task.id ? `
             <form class="task-card task-edit-card" data-edit-form="${task.id}">
               <span class="edit-mark" aria-hidden="true">✎</span>
@@ -306,9 +313,18 @@ function taskCards(tasks) {
               <button type="button" data-cancel-edit>취소</button>
             </form>` : `
             <article class="task-card ${selectedTaskId === task.id ? 'selected' : ''}" draggable="true" data-task-id="${task.id}" tabindex="0">
-              <div class="time-flags" role="group" aria-label="계획 시간 선택">
+              <div class="time-flags" role="group" aria-label="시간 계획 및 폴더 분류">
                 ${[9, 13, 15].map((hour) => `<button type="button" class="time-flag" data-plan-task="${task.id}" data-plan-hour="${hour}" aria-label="${escapeHtml(task.title)}: ${selectedDate} ${hourLabel(hour)}에 계획">${String(hour).padStart(2, '0')}시</button>`).join('')}
                 <button type="button" class="time-flag time-flag-more" data-time-picker="${task.id}" aria-label="다른 계획 시간 선택" aria-expanded="false" aria-controls="time-picker-${task.id}">＋</button>
+                <button type="button" class="time-flag folder-flag" data-folder-picker="${task.id}" aria-label="${escapeHtml(task.title)} 폴더 분류" aria-expanded="false" aria-controls="folder-picker-${task.id}">폴더</button>
+              </div>
+              <div class="folder-picker" id="folder-picker-${task.id}" role="group" aria-label="이동할 폴더" hidden>
+                <p>이동할 폴더</p>
+                <div class="folder-picker-options">${destinations.map((folder) => {
+                  const current = (workspace.folders.some((item) => item.id === workspace.assignments[task.id]) ? workspace.assignments[task.id] : '') === folder.id;
+                  return `<button type="button" data-classify-task="${task.id}" data-destination="${folder.id}" ${current ? 'disabled aria-current="true"' : ''}>${escapeHtml(folder.name)}${current ? ' · 현재' : ''}</button>`;
+                }).join('')}</div>
+                ${workspace.folders.length ? '' : '<small>새 폴더를 만들면 여기에 표시돼요.</small>'}
               </div>
               <div class="time-picker" id="time-picker-${task.id}" hidden>
                 <p>${selectedDate} · 계획 시간</p>
@@ -493,32 +509,35 @@ async function addPlan(taskId, hour) {
   }
 }
 
-function closeTimePickers() {
-  document.querySelectorAll('.time-picker').forEach((picker) => { picker.hidden = true; });
-  document.querySelectorAll('[data-time-picker]').forEach((button) => button.setAttribute('aria-expanded', 'false'));
+function closeTaskPickers() {
+  document.querySelectorAll('.time-picker, .folder-picker').forEach((picker) => { picker.hidden = true; });
+  document.querySelectorAll('[data-time-picker], [data-folder-picker]').forEach((button) => button.setAttribute('aria-expanded', 'false'));
 }
 
 document.addEventListener('click', (event) => {
-  if (!event.target.closest('.time-picker, [data-time-picker]')) closeTimePickers();
+  if (!event.target.closest('.time-picker, .folder-picker, [data-time-picker], [data-folder-picker]')) closeTaskPickers();
 });
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
-  const trigger = document.querySelector('[data-time-picker][aria-expanded="true"]');
-  closeTimePickers();
+  const trigger = document.querySelector('[data-time-picker][aria-expanded="true"], [data-folder-picker][aria-expanded="true"]');
+  closeTaskPickers();
   trigger?.focus();
 });
 
 function bindEvents() {
+  document.querySelectorAll('[data-classify-task]').forEach((button) => button.addEventListener('click', () => {
+    moveTaskToFolder(button.dataset.classifyTask, button.dataset.destination);
+  }));
   document.querySelectorAll('[data-plan-task]').forEach((button) => button.addEventListener('click', () => {
     addPlan(button.dataset.planTask, button.dataset.planHour);
   }));
-  document.querySelectorAll('[data-time-picker]').forEach((button) => button.addEventListener('click', () => {
+  document.querySelectorAll('[data-time-picker], [data-folder-picker]').forEach((button) => button.addEventListener('click', () => {
     const picker = document.getElementById(button.getAttribute('aria-controls'));
     const opening = picker.hidden;
-    closeTimePickers();
+    closeTaskPickers();
     picker.hidden = !opening;
     button.setAttribute('aria-expanded', String(opening));
-    if (opening) picker.querySelector('button').focus();
+    if (opening) picker.querySelector('button:not(:disabled)')?.focus();
   }));
   document.querySelector('#login-button')?.addEventListener('click', () => {
     authState = { ...authState, modalOpen: true, error: '', message: '' };
@@ -685,8 +704,8 @@ function bindEvents() {
 
   document.querySelectorAll('.task-card[data-task-id]').forEach((card) => {
     card.addEventListener('dragstart', (event) => {
-      if (event.target.closest('button, input, .time-picker')) { event.preventDefault(); return; }
-      closeTimePickers();
+      if (event.target.closest('button, input, .time-picker, .folder-picker')) { event.preventDefault(); return; }
+      closeTaskPickers();
       draggingTaskId = card.dataset.taskId;
       event.dataTransfer.setData('text/plain', card.dataset.taskId);
       event.dataTransfer.effectAllowed = 'copyMove';
@@ -698,7 +717,7 @@ function bindEvents() {
       stopDragScroll();
     });
     card.addEventListener('click', (event) => {
-      if (event.target.closest('button, select, .time-picker')) return;
+      if (event.target.closest('button, select, .time-picker, .folder-picker')) return;
       selectedTaskId = selectedTaskId === card.dataset.taskId ? null : card.dataset.taskId;
       render();
     });
